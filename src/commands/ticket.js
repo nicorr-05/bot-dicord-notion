@@ -37,7 +37,15 @@ async function fetchAllMessages(thread) {
   return allMessages
     .filter((m) => !m.author.bot && !m.content.startsWith("/"))
     .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-    .map((m) => ({ author: m.author.username, content: m.content }));
+    .map((m) => ({
+      author: m.author.username,
+      content: m.content,
+      attachments: [...m.attachments.values()].map((a) => ({
+        url: a.url,
+        name: a.name,
+        contentType: a.contentType || "",
+      })),
+    }));
 }
 
 export async function execute(interaction) {
@@ -79,7 +87,15 @@ export async function execute(interaction) {
       fetchTicketOptions(),
     ]);
 
-    // 3. Store pending selections (pre-fill priority from AI)
+    // 3. Collect all attachments from the thread
+    const allAttachments = messages.flatMap((m) => m.attachments || []);
+    const images = allAttachments.filter((a) => a.contentType.startsWith("image/"));
+    const videos = allAttachments.filter((a) => a.contentType.startsWith("video/"));
+    const otherFiles = allAttachments.filter(
+      (a) => !a.contentType.startsWith("image/") && !a.contentType.startsWith("video/")
+    );
+
+    // 4. Store pending selections (pre-fill priority from AI)
     const userId = interaction.user.id;
     const pending = {
       priority: analysis.priority,
@@ -87,7 +103,7 @@ export async function execute(interaction) {
       assigneeId: null,
     };
 
-    // 4. Build select menus
+    // 5. Build select menus
     const priorityRow = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`ticket_priority_${userId}`)
@@ -134,7 +150,12 @@ export async function execute(interaction) {
         .setStyle(ButtonStyle.Secondary)
     );
 
-    // 5. Show embed with AI analysis + select menus
+    // 6. Show embed with AI analysis + select menus
+    const evidenceSummary =
+      allAttachments.length > 0
+        ? `🖼️ ${images.length} image(s)  🎬 ${videos.length} video(s)  📎 ${otherFiles.length} file(s)`
+        : "None";
+
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle("🎫 New Bug Ticket — Review & Confirm")
@@ -144,7 +165,8 @@ export async function execute(interaction) {
         {
           name: "🔁 Steps to Reproduce",
           value: analysis.stepsToReproduce || "Not specified",
-        }
+        },
+        { name: "📎 Evidence found", value: evidenceSummary }
       )
       .setFooter({ text: `${messages.length} messages analyzed · Select options and click Create Ticket` });
 
@@ -188,6 +210,7 @@ export async function execute(interaction) {
           threadUrl,
           sprintId: pending.sprintId,
           assigneeId: pending.assigneeId,
+          attachments: allAttachments,
         });
 
         await interaction.editReply(

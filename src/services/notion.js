@@ -64,6 +64,7 @@ export async function createTicket(ticket) {
     threadUrl,
     sprintId,
     assigneeId,
+    attachments = [],
   } = ticket;
 
   const properties = {
@@ -150,6 +151,50 @@ export async function createTicket(ticket) {
           ],
         },
       },
+      // Evidence section — only added if there are attachments
+      ...(attachments.length > 0
+        ? [
+            {
+              object: "block",
+              type: "heading_2",
+              heading_2: {
+                rich_text: [{ text: { content: "Evidence" } }],
+              },
+            },
+            ...attachments.map((a) => {
+              const type = a.contentType || "";
+              if (type.startsWith("image/")) {
+                return {
+                  object: "block",
+                  type: "image",
+                  image: { type: "external", external: { url: a.url } },
+                };
+              } else if (type.startsWith("video/")) {
+                return {
+                  object: "block",
+                  type: "video",
+                  video: { type: "external", external: { url: a.url } },
+                };
+              } else {
+                // Generic file — add as a link paragraph
+                return {
+                  object: "block",
+                  type: "paragraph",
+                  paragraph: {
+                    rich_text: [
+                      {
+                        text: {
+                          content: `📎 ${a.name}`,
+                          link: { url: a.url },
+                        },
+                      },
+                    ],
+                  },
+                };
+              }
+            }),
+          ]
+        : []),
     ],
   });
 
