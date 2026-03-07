@@ -1,6 +1,14 @@
-import { SlashCommandBuilder, ChannelType } from "discord.js";
+import {
+  SlashCommandBuilder,
+  ChannelType,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+} from "discord.js";
 import { analyzeThread } from "../services/openai.js";
-import { createTicket } from "../services/notion.js";
+import { createTicket, fetchTicketOptions } from "../services/notion.js";
 
 export const data = new SlashCommandBuilder()
   .setName("ticket")
@@ -26,14 +34,10 @@ async function fetchAllMessages(thread) {
     if (batch.size < 100) break;
   }
 
-  // Sort oldest → newest and filter out bot messages and the /ticket command itself
   return allMessages
     .filter((m) => !m.author.bot && !m.content.startsWith("/"))
     .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-    .map((m) => ({
-      author: m.author.username,
-      content: m.content,
-    }));
+    .map((m) => ({ author: m.author.username, content: m.content }));
 }
 
 export async function execute(interaction) {
@@ -50,7 +54,7 @@ export async function execute(interaction) {
     });
   }
 
-  // Optional: enforce that it's only used in bug-reports threads
+  // Enforce bug-reports channel
   const parentChannel = channel.parent;
   if (parentChannel?.name !== "bug-reports") {
     return interaction.reply({
@@ -59,44 +63,160 @@ export async function execute(interaction) {
     });
   }
 
-  // Defer so Discord doesn't time out (AI + Notion can take a few seconds)
   await interaction.deferReply();
 
   try {
-    // 1. Fetch all messages from the thread
+    // 1. Fetch messages
     const messages = await fetchAllMessages(channel);
-
     if (messages.length === 0) {
-      return interaction.editReply(
-        "❌ No messages found in this thread to analyze."
-      );
+      return interaction.editReply("❌ No messages found in this thread to analyze.");
     }
 
-    // 2. Analyze with OpenAI
+    // 2. Analyze with AI + fetch Notion options in parallel
     await interaction.editReply("🤖 Analyzing thread with AI...");
-    const analysis = await analyzeThread(channel.name, messages);
+    const [analysis, options] = await Promise.all([
+      analyzeThread(channel.name, messages),
+      fetchTicketOptions(),
+    ]);
 
-    // 3. Create ticket in Notion
-    await interaction.editReply("📝 Creating ticket in Notion...");
-    const threadUrl = `https://discord.com/channels/${interaction.guildId}/${channel.id}`;
-
-    const notionPage = await createTicket({
-      title: analysis.title,
-      description: analysis.description,
+    // 3. Store pending selections (pre-fill priority from AI)
+    const userId = interaction.user.id;
+    const pending = {
       priority: analysis.priority,
-      stepsToReproduce: analysis.stepsToReproduce,
-      reporterName: interaction.user.username,
-      threadUrl,
+      sprintId: null,
+      assigneeId: null,
+    };
+
+    // 4. Build select menus
+    const priorityRow = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`ticket_priority_${userId}`)
+        .setPlaceholder(`Priority — AI suggested: ${analysis.priority}`)
+        .addOptions(
+          options.priorityOptions.map((p) => ({
+            label: p,
+            value: p,
+            default: p === analysis.priority,
+          }))
+        )
+    );
+
+    const sprintRow = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`ticket_sprint_${userId}`)
+        .setPlaceholder("Select sprint...")
+        .addOptions(
+          options.sprintOptions.length > 0
+            ? options.sprintOptions.map((s) => ({ label: s.name, value: s.id }))
+            : [{ label: "No sprints found", value: "none" }]
+        )
+    );
+
+    const assigneeRow = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`ticket_assignee_${userId}`)
+        .setPlaceholder("Select assignee...")
+        .addOptions(
+          options.userOptions.length > 0
+            ? options.userOptions.slice(0, 25).map((u) => ({ label: u.name, value: u.id }))
+            : [{ label: "Unassigned", value: "none" }]
+        )
+    );
+
+    const buttonRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`ticket_create_${userId}`)
+        .setLabel("✅ Create Ticket")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`ticket_cancel_${userId}`)
+        .setLabel("❌ Cancel")
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    // 5. Show embed with AI analysis + select menus
+    const embed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle("🎫 New Bug Ticket — Review & Confirm")
+      .addFields(
+        { name: "📌 Title", value: analysis.title },
+        { name: "📝 Description", value: analysis.description },
+        {
+          name: "🔁 Steps to Reproduce",
+          value: analysis.stepsToReproduce || "Not specified",
+        }
+      )
+      .setFooter({ text: `${messages.length} messages analyzed · Select options and click Create Ticket` });
+
+    const reply = await interaction.editReply({
+      embeds: [embed],
+      components: [priorityRow, sprintRow, assigneeRow, buttonRow],
     });
 
-    // 4. Success response
-    return interaction.editReply(
-      `✅ **Ticket created successfully!**\n\n` +
-      `**Title:** ${analysis.title}\n` +
-      `**Priority:** ${analysis.priority}\n` +
-      `**Notion:** ${notionPage.url}\n\n` +
-      `*${messages.length} messages analyzed.*`
-    );
+    // 6. Collect component interactions (2 min timeout)
+    const collector = reply.createMessageComponentCollector({
+      filter: (i) => i.user.id === userId,
+      time: 120_000,
+    });
+
+    collector.on("collect", async (i) => {
+      if (i.customId === `ticket_priority_${userId}`) {
+        pending.priority = i.values[0];
+        await i.deferUpdate();
+      } else if (i.customId === `ticket_sprint_${userId}`) {
+        pending.sprintId = i.values[0] === "none" ? null : i.values[0];
+        await i.deferUpdate();
+      } else if (i.customId === `ticket_assignee_${userId}`) {
+        pending.assigneeId = i.values[0] === "none" ? null : i.values[0];
+        await i.deferUpdate();
+      } else if (i.customId === `ticket_create_${userId}`) {
+        collector.stop("submitted");
+        await i.deferUpdate();
+        await interaction.editReply({
+          content: "📝 Creating ticket in Notion...",
+          embeds: [],
+          components: [],
+        });
+
+        const threadUrl = `https://discord.com/channels/${interaction.guildId}/${channel.id}`;
+        const notionPage = await createTicket({
+          title: analysis.title,
+          description: analysis.description,
+          priority: pending.priority,
+          stepsToReproduce: analysis.stepsToReproduce || "Not specified",
+          reporterName: interaction.user.username,
+          threadUrl,
+          sprintId: pending.sprintId,
+          assigneeId: pending.assigneeId,
+        });
+
+        await interaction.editReply(
+          `✅ **Ticket created successfully!**\n\n` +
+            `**Title:** ${analysis.title}\n` +
+            `**Priority:** ${pending.priority}\n` +
+            `**Notion:** ${notionPage.url}\n\n` +
+            `*${messages.length} messages analyzed.*`
+        );
+      } else if (i.customId === `ticket_cancel_${userId}`) {
+        collector.stop("cancelled");
+        await i.deferUpdate();
+        await interaction.editReply({
+          content: "❌ Ticket creation cancelled.",
+          embeds: [],
+          components: [],
+        });
+      }
+    });
+
+    collector.on("end", (_, reason) => {
+      if (reason === "time") {
+        interaction.editReply({
+          content: "⏱️ Timed out. Run `/ticket` again.",
+          embeds: [],
+          components: [],
+        });
+      }
+    });
   } catch (error) {
     console.error("[/ticket] Error:", error);
     return interaction.editReply(
