@@ -38,5 +38,19 @@ Respond ONLY with valid JSON, no markdown, no extra text.
   });
 
   const result = JSON.parse(response.choices[0].message.content);
+
+  // Sanitize: ensure all fields are strings (OpenAI sometimes returns arrays)
+  if (Array.isArray(result.stepsToReproduce)) {
+    result.stepsToReproduce = result.stepsToReproduce
+      .map((s, i) => `${i + 1}. ${s}`)
+      .join("\n");
+  }
+  if (Array.isArray(result.description)) {
+    result.description = result.description.join(" ");
+  }
+  if (Array.isArray(result.title)) {
+    result.title = result.title[0];
+  }
+
   return result;
 }
