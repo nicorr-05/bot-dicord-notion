@@ -23,24 +23,42 @@ export async function fetchTicketOptions() {
       "Low",
     ];
 
-  // Sprint — from relation database (get latest 10 sprints)
-  const sprintRelationDbId = db.properties.Sprint?.relation?.database_id;
+  // Sprint — detect property type and fetch accordingly
+  const sprintProp = db.properties.Sprint;
+  console.log("[Notion] Sprint property type:", sprintProp?.type, JSON.stringify(sprintProp).slice(0, 200));
+
   let sprintOptions = [];
-  if (sprintRelationDbId) {
-    const res = await notion.databases.query({
-      database_id: sprintRelationDbId,
-      page_size: 10,
-      sorts: [{ timestamp: "created_time", direction: "descending" }],
-    });
-    sprintOptions = res.results
-      .map((p) => ({
-        id: p.id,
-        name:
-          p.properties.Name?.title?.[0]?.plain_text ??
-          p.properties.title?.title?.[0]?.plain_text ??
-          "Unnamed Sprint",
-      }))
-      .filter((s) => s.name !== "Unnamed Sprint");
+
+  if (sprintProp?.type === "relation") {
+    // Sprint is a relation to another database
+    const sprintRelationDbId = sprintProp.relation?.database_id;
+    if (sprintRelationDbId) {
+      const res = await notion.databases.query({
+        database_id: sprintRelationDbId,
+        page_size: 10,
+        sorts: [{ timestamp: "created_time", direction: "descending" }],
+      });
+      sprintOptions = res.results
+        .map((p) => ({
+          id: p.id,
+          name:
+            p.properties.Name?.title?.[0]?.plain_text ??
+            p.properties.title?.title?.[0]?.plain_text ??
+            "Unnamed Sprint",
+        }))
+        .filter((s) => s.name !== "Unnamed Sprint");
+    }
+  } else if (sprintProp?.type === "select") {
+    // Sprint is a select property — use its options directly
+    sprintOptions = (sprintProp.select?.options ?? []).map((o) => ({
+      id: o.name, // use name as value since there's no page ID
+      name: o.name,
+    }));
+  } else if (sprintProp?.type === "multi_select") {
+    sprintOptions = (sprintProp.multi_select?.options ?? []).map((o) => ({
+      id: o.name,
+      name: o.name,
+    }));
   }
 
   // Assignee — workspace members only (type === "person")
@@ -89,7 +107,16 @@ export async function createTicket(ticket) {
   };
 
   if (sprintId) {
-    properties.Sprint = { relation: [{ id: sprintId }] };
+    // Check Sprint property type to set the correct value format
+    const db = await notion.databases.retrieve({ database_id: DATABASE_ID });
+    const sprintType = db.properties.Sprint?.type;
+    if (sprintType === "relation") {
+      properties.Sprint = { relation: [{ id: sprintId }] };
+    } else if (sprintType === "select") {
+      properties.Sprint = { select: { name: sprintId } }; // sprintId holds the name in this case
+    } else if (sprintType === "multi_select") {
+      properties.Sprint = { multi_select: [{ name: sprintId }] };
+    }
   }
 
   if (assigneeId) {
