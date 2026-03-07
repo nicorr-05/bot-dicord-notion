@@ -49,11 +49,14 @@ export async function fetchTicketOptions() {
         .filter((s) => s.name !== "Unnamed Sprint");
     }
   } else if (sprintProp?.type === "select") {
-    // Sprint is a select property — use its options directly
-    sprintOptions = (sprintProp.select?.options ?? []).map((o) => ({
-      id: o.name, // use name as value since there's no page ID
+    const allOptions = (sprintProp.select?.options ?? []).map((o) => ({
+      id: o.name,
       name: o.name,
     }));
+    // Show only: Backlog + the latest sprint (last one created)
+    const backlog = allOptions.find((o) => o.name.toLowerCase().includes("backlog"));
+    const latestSprint = [...allOptions].reverse().find((o) => !o.name.toLowerCase().includes("backlog"));
+    sprintOptions = [backlog, latestSprint].filter(Boolean);
   } else if (sprintProp?.type === "multi_select") {
     sprintOptions = (sprintProp.multi_select?.options ?? []).map((o) => ({
       id: o.name,

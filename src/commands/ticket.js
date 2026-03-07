@@ -123,7 +123,7 @@ export async function execute(interaction) {
         .setPlaceholder("Select sprint...")
         .addOptions(
           options.sprintOptions.length > 0
-            ? options.sprintOptions.map((s) => ({ label: s.name, value: s.id }))
+            ? options.sprintOptions.slice(0, 25).map((s) => ({ label: s.name, value: s.id }))
             : [{ label: "No sprints found", value: "none" }]
         )
     );
