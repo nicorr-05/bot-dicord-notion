@@ -87,6 +87,15 @@ export async function execute(interaction) {
       fetchTicketOptions(),
     ]);
 
+    // The AI can return a priority that no longer exists in the DB schema —
+    // snap it to a real option so the select menu and Notion agree.
+    analysis.priority =
+      options.priorityOptions.find(
+        (p) => p.toLowerCase() === String(analysis.priority ?? "").toLowerCase()
+      ) ??
+      options.priorityOptions.find((p) => p.toLowerCase() === "medium") ??
+      options.priorityOptions[0];
+
     // 3. Collect all attachments from the thread
     const allAttachments = messages.flatMap((m) => m.attachments || []);
     const images = allAttachments.filter((a) => a.contentType.startsWith("image/"));
@@ -95,12 +104,16 @@ export async function execute(interaction) {
       (a) => !a.contentType.startsWith("image/") && !a.contentType.startsWith("video/")
     );
 
-    // 4. Store pending selections (pre-fill priority from AI)
+    // 4. Store pending selections. These are the values used if the reporter just
+    //    hits "Create Ticket": AI priority, no sprint (= Backlog), default assignee.
     const userId = interaction.user.id;
+    const defaultAssignee = options.userOptions.find(
+      (u) => u.id === options.defaultAssigneeId
+    );
     const pending = {
       priority: analysis.priority,
       sprintId: null,
-      assigneeId: null,
+      assigneeId: options.defaultAssigneeId ?? null,
     };
 
     // 5. Build select menus
@@ -117,26 +130,46 @@ export async function execute(interaction) {
         )
     );
 
+    // In Notion's native sprints the backlog is simply "no sprint", so it maps to
+    // the "none" sentinel. It is the default: a bug reported mid-sprint is unplanned
+    // work and shouldn't silently expand the running sprint's scope.
+    const sprintChoices = [
+      { label: "📥 Backlog (sin sprint)", value: "none", default: true },
+      ...options.sprintOptions.slice(0, 24).map((s) => ({
+        label: s.status ? `${s.name} — ${s.status}` : s.name,
+        value: s.id,
+        default: false,
+      })),
+    ];
+
     const sprintRow = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`ticket_sprint_${userId}`)
-        .setPlaceholder("Select sprint...")
-        .addOptions(
-          options.sprintOptions.length > 0
-            ? options.sprintOptions.slice(0, 25).map((s) => ({ label: s.name, value: s.id }))
-            : [{ label: "No sprints found", value: "none" }]
-        )
+        .setPlaceholder("Sprint — por defecto: Backlog")
+        .addOptions(sprintChoices)
     );
+
+    const assigneeChoices = options.userOptions.slice(0, 24).map((u) => ({
+      label: u.name,
+      value: u.id,
+      default: u.id === options.defaultAssigneeId,
+    }));
+    // Escape hatch so the default assignee can be cleared.
+    assigneeChoices.push({
+      label: "Sin asignar",
+      value: "none",
+      default: !assigneeChoices.some((c) => c.default),
+    });
 
     const assigneeRow = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`ticket_assignee_${userId}`)
-        .setPlaceholder("Select assignee...")
-        .addOptions(
-          options.userOptions.length > 0
-            ? options.userOptions.slice(0, 25).map((u) => ({ label: u.name, value: u.id }))
-            : [{ label: "Unassigned", value: "none" }]
+        .setPlaceholder(
+          defaultAssignee
+            ? `Assignee — por defecto: ${defaultAssignee.name}`
+            : "Select assignee..."
         )
+        .addOptions(assigneeChoices)
     );
 
     const buttonRow = new ActionRowBuilder().addComponents(
@@ -209,6 +242,7 @@ export async function execute(interaction) {
           reporterName: interaction.user.username,
           threadUrl,
           sprintId: pending.sprintId,
+          sprintType: options.sprintType,
           assigneeId: pending.assigneeId,
           attachments: allAttachments,
         });

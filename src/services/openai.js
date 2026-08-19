@@ -24,7 +24,7 @@ ${conversation}
 Return a JSON object with exactly these fields:
 - "title": A concise, clear bug title (max 80 chars). Keep it in the same language as the thread.
 - "description": A clear summary of the bug, what happens vs what should happen (2-4 sentences). Same language as the thread.
-- "priority": One of exactly: "High", "Low", "Urgent" — based on the severity discussed.
+- "priority": One of exactly: "Urgent", "High", "Medium", "Low" — based on the severity discussed.
 - "stepsToReproduce": A numbered list of steps to reproduce the bug, extracted from the discussion. If not clear, write "Not specified". Same language as thread.
 
 Respond ONLY with valid JSON, no markdown, no extra text.
