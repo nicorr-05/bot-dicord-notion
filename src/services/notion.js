@@ -118,6 +118,20 @@ export async function fetchTicketOptions() {
   const defaultAssigneeId = userOptions.some((u) => u.id === DEFAULT_ASSIGNEE_ID)
     ? DEFAULT_ASSIGNEE_ID
     : null;
+
+  // Fail loudly: a missing/stale default silently produces unassigned tickets,
+  // which looks like a bug in the menu rather than a config problem.
+  if (!DEFAULT_ASSIGNEE_ID) {
+    console.warn(
+      "[Notion] NOTION_DEFAULT_ASSIGNEE_ID no está definido — los tickets saldrán sin asignar. " +
+        "¿Reiniciaste el bot después de editar el .env?"
+    );
+  } else if (!defaultAssigneeId) {
+    console.warn(
+      `[Notion] NOTION_DEFAULT_ASSIGNEE_ID="${DEFAULT_ASSIGNEE_ID}" no coincide con ningún ` +
+        "usuario del workspace — los tickets saldrán sin asignar."
+    );
+  }
   if (defaultAssigneeId) {
     userOptions = [
       ...userOptions.filter((u) => u.id === defaultAssigneeId),
