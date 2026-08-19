@@ -247,10 +247,20 @@ export async function execute(interaction) {
           attachments: allAttachments,
         });
 
+        // Surface sprint/assignee too — both have defaults the reporter may not have touched.
+        const sprintLabel =
+          options.sprintOptions.find((sp) => sp.id === pending.sprintId)?.name ??
+          "Backlog";
+        const assigneeLabel =
+          options.userOptions.find((u) => u.id === pending.assigneeId)?.name ??
+          "Sin asignar";
+
         await interaction.editReply(
           `✅ **Ticket created successfully!**\n\n` +
             `**Title:** ${analysis.title}\n` +
             `**Priority:** ${pending.priority}\n` +
+            `**Sprint:** ${sprintLabel}\n` +
+            `**Assignee:** ${assigneeLabel}\n` +
             `**Notion:** ${notionPage.url}\n\n` +
             `*${messages.length} messages analyzed.*`
         );
