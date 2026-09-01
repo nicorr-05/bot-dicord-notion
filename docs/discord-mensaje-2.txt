@@ -1,0 +1,24 @@
+⚠️ 4 COSAS QUE SE NOS VAN A OLVIDAR
+
+
+1) ESCRIBE TODO ANTES DE LANZAR /ticket
+
+El bot solo lee lo que ya está en el hilo. Si añades info después, no entra en el ticket.
+
+
+2) /ticket SOLO FUNCIONA DENTRO DE UN HILO DE #bug-reports
+
+En el canal suelto, o en otro canal, te va a rebotar.
+
+
+3) LOS MENÚS SOLO LOS TOCA QUIEN LANZÓ EL COMANDO
+
+Si te equivocas dale a ❌ Cancel y vuelve a empezar. No pasa nada.
+
+
+4) ESTO ES SOLO PARA BUGS 🐞
+
+Todo lo que entra por aquí se marca como Bug en Notion. Ideas y mejoras (Feature request) no van por este canal.
+
+
+El ticket se crea en Tasks Tracker Especialistas con estado Not started y con el link al hilo, así que siempre se puede volver a la conversación original.

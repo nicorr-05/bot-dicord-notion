@@ -1,0 +1,38 @@
+🐞 CÓMO REPORTAR BUGS
+
+Ya tenemos bot: tú cuentas el bug en un hilo y él arma el ticket en Notion. No abras tickets a mano.
+
+
+1️⃣ ABRE UN HILO EN #bug-reports
+
+Desde el símbolo de más del lado izquierdo del editor de texto. O envía el primer mensaje, dale click derecho y selecciona crear hilo.
+
+El nombre del hilo es el título del bug. Sé concreto:
+
+✅ No se guardan los cambios en Historia clínica
+❌ bug, no funciona, ayuda
+
+
+2️⃣ CUENTA QUÉ PASÓ (dentro del hilo)
+
+No es necesario ser muy extenso, solamente trata de explicar bien el problema.
+
+Escribe normal, no hace falta formato. Pueden opinar varios en el hilo, el bot lee todo.
+
+
+3️⃣ SUELTA LA EVIDENCIA EN EL HILO
+
+Capturas, videos, logs. Se suben solos al ticket como Evidence. Un video de 10s vale más que tres párrafos.
+
+
+4️⃣ ESCRIBE /ticket
+
+La IA lee el hilo completo y te muestra un resumen para revisar.
+
+
+5️⃣ REVISA Y DALE A ✅ Create Ticket
+
+Puedes ajustar antes de confirmar:
+• Priority: la IA propone una, cámbiala si no cuadra
+• Sprint: por defecto Backlog. Solo mételo a Sprint 1 (Current) si es urgente y va ahora
+• Assignee: por defecto Nicolás, que lo reparte

@@ -8,7 +8,11 @@ import {
   EmbedBuilder,
 } from "discord.js";
 import { analyzeThread } from "../services/openai.js";
-import { createTicket, fetchTicketOptions } from "../services/notion.js";
+import {
+  createTicket,
+  fetchTicketOptions,
+  resolveReporterId,
+} from "../services/notion.js";
 
 export const data = new SlashCommandBuilder()
   .setName("ticket")
@@ -110,10 +114,27 @@ export async function execute(interaction) {
     const defaultAssignee = options.userOptions.find(
       (u) => u.id === options.defaultAssigneeId
     );
+
+    // Reporter = whoever ran /ticket. Discord and Notion accounts aren't linked,
+    // so match on name (or an explicit env mapping) and let them fix it in the menu.
+    const defaultReporterId = resolveReporterId(
+      userId,
+      [
+        interaction.member?.displayName,
+        interaction.user.globalName,
+        interaction.user.username,
+      ],
+      options.userOptions
+    );
+    const defaultReporter = options.userOptions.find(
+      (u) => u.id === defaultReporterId
+    );
+
     const pending = {
       priority: analysis.priority,
       sprintId: null,
       assigneeId: options.defaultAssigneeId ?? null,
+      reporterId: defaultReporterId,
     };
 
     // 5. Build select menus
@@ -172,6 +193,28 @@ export async function execute(interaction) {
         .addOptions(assigneeChoices)
     );
 
+    const reporterChoices = options.userOptions.slice(0, 24).map((u) => ({
+      label: u.name,
+      value: u.id,
+      default: u.id === defaultReporterId,
+    }));
+    reporterChoices.push({
+      label: "Sin reporter",
+      value: "none",
+      default: !reporterChoices.some((c) => c.default),
+    });
+
+    const reporterRow = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`ticket_reporter_${userId}`)
+        .setPlaceholder(
+          defaultReporter
+            ? `Reporter — detectado: ${defaultReporter.name}`
+            : "Reporter — ¿quién eres en Notion?"
+        )
+        .addOptions(reporterChoices)
+    );
+
     const buttonRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`ticket_create_${userId}`)
@@ -205,7 +248,7 @@ export async function execute(interaction) {
 
     const reply = await interaction.editReply({
       embeds: [embed],
-      components: [priorityRow, sprintRow, assigneeRow, buttonRow],
+      components: [priorityRow, sprintRow, assigneeRow, reporterRow, buttonRow],
     });
 
     // 6. Collect component interactions (2 min timeout)
@@ -224,6 +267,9 @@ export async function execute(interaction) {
       } else if (i.customId === `ticket_assignee_${userId}`) {
         pending.assigneeId = i.values[0] === "none" ? null : i.values[0];
         await i.deferUpdate();
+      } else if (i.customId === `ticket_reporter_${userId}`) {
+        pending.reporterId = i.values[0] === "none" ? null : i.values[0];
+        await i.deferUpdate();
       } else if (i.customId === `ticket_create_${userId}`) {
         collector.stop("submitted");
         await i.deferUpdate();
@@ -240,10 +286,12 @@ export async function execute(interaction) {
           priority: pending.priority,
           stepsToReproduce: analysis.stepsToReproduce || "Not specified",
           reporterName: interaction.user.username,
+          reporterDiscordId: userId,
           threadUrl,
           sprintId: pending.sprintId,
           sprintType: options.sprintType,
           assigneeId: pending.assigneeId,
+          reporterId: pending.reporterId,
           attachments: allAttachments,
         });
 
@@ -254,6 +302,9 @@ export async function execute(interaction) {
         const assigneeLabel =
           options.userOptions.find((u) => u.id === pending.assigneeId)?.name ??
           "Sin asignar";
+        const reporterLabel =
+          options.userOptions.find((u) => u.id === pending.reporterId)?.name ??
+          "Sin reporter";
 
         await interaction.editReply(
           `✅ **Ticket created successfully!**\n\n` +
@@ -261,6 +312,7 @@ export async function execute(interaction) {
             `**Priority:** ${pending.priority}\n` +
             `**Sprint:** ${sprintLabel}\n` +
             `**Assignee:** ${assigneeLabel}\n` +
+            `**Reporter:** ${reporterLabel}\n` +
             `**Notion:** ${notionPage.url}\n\n` +
             `*${messages.length} messages analyzed.*`
         );

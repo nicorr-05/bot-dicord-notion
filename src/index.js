@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { Client, GatewayIntentBits, Collection } from "discord.js";
 import * as ticketCommand from "./commands/ticket.js";
+import { startCompletionWatcher } from "./services/completion-watcher.js";
 
 // ─── Bot Setup ────────────────────────────────────────────────────────────────
 const client = new Client({
@@ -16,9 +17,12 @@ client.commands = new Collection();
 client.commands.set(ticketCommand.data.name, ticketCommand);
 
 // ─── Events ───────────────────────────────────────────────────────────────────
-client.once("ready", () => {
+client.once("ready", async () => {
   console.log(`✅ Bot ready! Logged in as ${client.user.tag}`);
   console.log(`📋 Watching for /ticket commands in #bug-reports threads`);
+
+  // Announces in Discord every bug that reaches a completed status in Notion.
+  await startCompletionWatcher(client);
 });
 
 client.on("interactionCreate", async (interaction) => {
