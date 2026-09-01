@@ -14,6 +14,31 @@ const DEFAULT_INTERVAL_MINUTES = 5;
 /** Channel the announcement falls back to when a ticket has no usable thread. */
 const FALLBACK_CHANNEL_NAME = "bug-reports";
 
+const BUG_TASK_TYPE = "🐞 Bug";
+
+/**
+ * Wording per task type. A feature request announced as "Bug resuelto" reads as a
+ * mistake, so bugs get the fix-it phrasing and everything else gets the shipped-it
+ * phrasing.
+ */
+function wordingFor(taskType) {
+  return taskType === BUG_TASK_TYPE
+    ? {
+        title: "✅ Bug resuelto",
+        inThread: "¡tu reporte ya está resuelto!",
+        inChannel: "el bug que reportaste ya está resuelto:",
+        anonymous: "¡Este reporte ya está resuelto!",
+        footer: "Si el problema sigue, escríbelo aquí en el hilo.",
+      }
+    : {
+        title: "✅ Listo",
+        inThread: "¡lo que pediste ya está listo!",
+        inChannel: "lo que pediste ya está listo:",
+        anonymous: "¡Esto ya está listo!",
+        footer: null,
+      };
+}
+
 /** Discord API error codes that mean the thread is gone for good. */
 const GONE_ERROR_CODES = new Set([
   10003, // Unknown Channel
@@ -69,21 +94,30 @@ function pollIntervalMs() {
 }
 
 function buildEmbed(ticket, { inThread }) {
+  const wording = wordingFor(ticket.taskType);
+
   const embed = new EmbedBuilder()
     .setColor(0x57f287)
-    .setTitle("✅ Bug resuelto")
+    .setTitle(wording.title)
     .setURL(ticket.url)
     .setDescription(`**${ticket.title}**`)
     .addFields({
       name: "Estado",
       value: ticket.status ?? "Done",
       inline: true,
-    })
-    .setFooter({
+    });
+
+  if (ticket.taskType) {
+    embed.addFields({ name: "Tipo", value: ticket.taskType, inline: true });
+  }
+
+  if (wording.footer) {
+    embed.setFooter({
       text: inThread
-        ? "Si el problema sigue, escríbelo aquí en el hilo."
+        ? wording.footer
         : "Si el problema sigue, abre un hilo nuevo en #bug-reports.",
     });
+  }
 
   // In the channel there is no surrounding conversation, so link back to it.
   if (!inThread && ticket.threadUrl) {
@@ -209,15 +243,14 @@ async function notifyTicket(client, ticket) {
     ? `<@${reporterId}>`
     : ticket.reporterName ?? ticket.reporterNotionName;
 
+  const wording = wordingFor(ticket.taskType);
   let content;
-  if (thread) {
-    content = mention
-      ? `🎉 ${mention} ¡tu reporte ya está resuelto!`
-      : "🎉 ¡Este reporte ya está resuelto!";
+  if (!mention) {
+    content = `🎉 ${wording.anonymous}`;
+  } else if (thread) {
+    content = `🎉 ${mention} ${wording.inThread}`;
   } else {
-    content = mention
-      ? `🎉 ${mention} el bug que reportaste ya está resuelto:`
-      : "🎉 Un bug reportado ya está resuelto:";
+    content = `🎉 ${mention} ${wording.inChannel}`;
   }
 
   await target.send({

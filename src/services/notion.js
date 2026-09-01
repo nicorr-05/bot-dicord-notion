@@ -466,12 +466,12 @@ async function queryAll(filter) {
  * Finds tickets that reached a completed status and have not been announced in
  * Discord yet.
  *
- * Scoped to bugs: the announcement lands in #bug-reports, so completed chores and
- * feature requests have no business there. Tickets opened by hand in Notion are
+ * Covers every task type, not just bugs: whoever asked for a polish or a feature
+ * wants to hear it shipped just as much. Tickets opened by hand in Notion are
  * included too — they just have no thread to reply into, so the watcher falls back
  * to the channel.
  *
- * @returns {Promise<Array<{pageId, title, url, status, threadId, threadUrl, reporterName, reporterDiscordId, reporterNotionId, reporterNotionName}>>}
+ * @returns {Promise<Array<{pageId, title, url, status, taskType, threadId, threadUrl, reporterName, reporterDiscordId, reporterNotionId, reporterNotionName}>>}
  */
 export async function fetchCompletedUnnotifiedTickets() {
   const db = await notion.databases.retrieve({ database_id: DATABASE_ID });
@@ -486,7 +486,6 @@ export async function fetchCompletedUnnotifiedTickets() {
         })),
       },
       { property: PROP.NOTIFIED, checkbox: { equals: false } },
-      { property: PROP.TASK_TYPE, select: { equals: BUG_TASK_TYPE } },
     ],
   });
 
@@ -504,6 +503,7 @@ export async function fetchCompletedUnnotifiedTickets() {
         title: getPageTitle(page) ?? "(sin título)",
         url: page.url,
         status: page.properties?.[PROP.STATUS]?.status?.name ?? null,
+        taskType: page.properties?.[PROP.TASK_TYPE]?.select?.name ?? null,
         threadId,
         threadUrl,
         reporterName:
