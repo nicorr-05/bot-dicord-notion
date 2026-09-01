@@ -1,5 +1,9 @@
 import { EmbedBuilder } from "discord.js";
 import {
+  linkByDiscordUsername,
+  linkByNotionId,
+} from "../config/user-links.js";
+import {
   ensureNotifiedProperty,
   fetchCompletedUnnotifiedTickets,
   markTicketNotified,
@@ -25,6 +29,9 @@ const givenUp = new Set();
 
 /** Resolved once per process — the channel lookup is a guild-wide fetch. */
 let fallbackChannelPromise = null;
+
+/** Discord username (lowercased) -> user id, or null when the lookup came up empty. */
+const reporterIdCache = new Map();
 
 /**
  * The #bug-reports channel, where tickets without a thread are announced.
@@ -91,6 +98,58 @@ function buildEmbed(ticket, { inThread }) {
 }
 
 /**
+ * The Discord id to @mention, best source first:
+ *
+ *   1. the id the bot stored on the ticket        — tickets created with /ticket
+ *   2. the identity table, via Notion's Reporter  — tickets opened by hand in Notion
+ *   3. the identity table, via the username
+ *   4. a guild search by username                 — someone not in the table yet
+ *
+ * Returns null when none of them land, and the announcement degrades to plain text
+ * rather than pinging the wrong person.
+ */
+async function resolveReporterDiscordId(client, ticket) {
+  if (ticket.reporterDiscordId) return ticket.reporterDiscordId;
+
+  const fromNotion = linkByNotionId(ticket.reporterNotionId)?.discordId;
+  if (fromNotion) return fromNotion;
+
+  const fromUsername = linkByDiscordUsername(ticket.reporterName)?.discordId;
+  if (fromUsername) return fromUsername;
+
+  const name = ticket.reporterName?.trim();
+  if (!name) return null;
+
+  const key = name.toLowerCase();
+  if (reporterIdCache.has(key)) return reporterIdCache.get(key);
+
+  let id = null;
+  try {
+    const guild = await client.guilds.fetch(process.env.DISCORD_GUILD_ID);
+    const members = await guild.members.search({ query: name, limit: 10 });
+    // Exact match only: `search` is a prefix search, and a near-miss would ping
+    // the wrong person.
+    const hit =
+      members.find((m) => m.user.username.toLowerCase() === key) ??
+      members.find((m) => m.displayName?.toLowerCase() === key);
+    id = hit?.id ?? null;
+
+    if (!id) {
+      console.warn(
+        `[Watcher] "${name}" no coincide con ningún miembro del server — aviso sin etiqueta.`
+      );
+    }
+  } catch (error) {
+    console.warn(
+      `[Watcher] Falló la búsqueda de "${name}" en el server: ${error.message}`
+    );
+  }
+
+  reporterIdCache.set(key, id);
+  return id;
+}
+
+/**
  * Resolves the thread a ticket came from, or null when there is none to post in
  * (ticket opened by hand in Notion, thread deleted, link no longer a thread).
  */
@@ -145,9 +204,10 @@ async function notifyTicket(client, ticket) {
     );
   }
 
-  const mention = ticket.reporterDiscordId
-    ? `<@${ticket.reporterDiscordId}>`
-    : ticket.reporterName;
+  const reporterId = await resolveReporterDiscordId(client, ticket);
+  const mention = reporterId
+    ? `<@${reporterId}>`
+    : ticket.reporterName ?? ticket.reporterNotionName;
 
   let content;
   if (thread) {
@@ -163,9 +223,7 @@ async function notifyTicket(client, ticket) {
   await target.send({
     content,
     embeds: [buildEmbed(ticket, { inThread: Boolean(thread) })],
-    allowedMentions: ticket.reporterDiscordId
-      ? { users: [ticket.reporterDiscordId] }
-      : { parse: [] },
+    allowedMentions: reporterId ? { users: [reporterId] } : { parse: [] },
   });
 
   return true;

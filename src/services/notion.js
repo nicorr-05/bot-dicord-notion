@@ -1,4 +1,5 @@
 import { Client } from "@notionhq/client";
+import { linkByDiscordId } from "../config/user-links.js";
 
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 const DATABASE_ID = process.env.NOTION_DATABASE_ID;
@@ -35,24 +36,6 @@ const DONE_STATUS_FALLBACK = ["Done"];
 /** Notion user pre-selected as assignee on every new ticket (optional). */
 const DEFAULT_ASSIGNEE_ID = process.env.NOTION_DEFAULT_ASSIGNEE_ID || null;
 
-/**
- * Explicit Discord-user-id -> Notion-user-id overrides, as JSON in the env:
- *   DISCORD_NOTION_REPORTER_MAP={"123456789":"a1b2c3d4-...."}
- * Name matching (below) covers the common case; this pins the ones it gets wrong.
- */
-const REPORTER_MAP = (() => {
-  const raw = process.env.DISCORD_NOTION_REPORTER_MAP;
-  if (!raw) return {};
-  try {
-    return JSON.parse(raw);
-  } catch {
-    console.warn(
-      "[Notion] DISCORD_NOTION_REPORTER_MAP no es JSON válido — se ignora."
-    );
-    return {};
-  }
-})();
-
 /** Lowercases and strips accents so "Nicolás" and "nicolas" compare equal. */
 function normalizeName(name) {
   return String(name ?? "")
@@ -87,10 +70,13 @@ export function matchNotionUser(discordNames, userOptions) {
   return partial?.id ?? null;
 }
 
-/** Resolves the Notion user for a Discord reporter: env override wins over name matching. */
+/**
+ * Resolves the Notion user for a Discord reporter. The identity table wins; name
+ * matching is the fallback for whoever isn't in it yet.
+ */
 export function resolveReporterId(discordUserId, discordNames, userOptions) {
-  const pinned = REPORTER_MAP[discordUserId];
-  if (pinned && userOptions.some((u) => u.id === pinned)) return pinned;
+  const linked = linkByDiscordId(discordUserId)?.notionId;
+  if (linked && userOptions.some((u) => u.id === linked)) return linked;
   return matchNotionUser(discordNames, userOptions);
 }
 
@@ -485,7 +471,7 @@ async function queryAll(filter) {
  * included too — they just have no thread to reply into, so the watcher falls back
  * to the channel.
  *
- * @returns {Promise<Array<{pageId, title, url, status, threadId, threadUrl, reporterName, reporterDiscordId}>>}
+ * @returns {Promise<Array<{pageId, title, url, status, threadId, threadUrl, reporterName, reporterDiscordId, reporterNotionId, reporterNotionName}>>}
  */
 export async function fetchCompletedUnnotifiedTickets() {
   const db = await notion.databases.retrieve({ database_id: DATABASE_ID });
@@ -511,6 +497,8 @@ export async function fetchCompletedUnnotifiedTickets() {
       // .../channels/{guildId}/{threadId}
       const threadId = threadUrl?.match(/\/(\d+)\s*$/)?.[1] ?? null;
 
+      const reporter = page.properties?.[PROP.REPORTER]?.people?.[0] ?? null;
+
       return {
         pageId: page.id,
         title: getPageTitle(page) ?? "(sin título)",
@@ -522,6 +510,8 @@ export async function fetchCompletedUnnotifiedTickets() {
           description.match(/Reported by:\s*([^\n(]+)/)?.[1]?.trim() ?? null,
         reporterDiscordId:
           description.match(/Discord ID:\s*(\d+)/)?.[1] ?? null,
+        reporterNotionId: reporter?.id ?? null,
+        reporterNotionName: reporter?.name ?? null,
       };
     });
 }
