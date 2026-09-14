@@ -20,6 +20,12 @@ const PROP = {
   ASSIGNEE: "Assignee",
   REPORTER: "Reporter",
   NOTIFIED: "Discord notificado",
+  AREA: "Área",
+  COMPLETED: "Completed",
+  RELEASE_VIDEO: "Video release",
+  RELEASE_PUBLISHED: "Release publicado",
+  RELEASE_MESSAGE: "Release Discord",
+  RELEASE_SUMMARY: "Release resumen",
 };
 
 const DEFAULT_STATUS = "Not started";
@@ -522,4 +528,233 @@ export async function markTicketNotified(pageId) {
     page_id: pageId,
     properties: { [PROP.NOTIFIED]: { checkbox: true } },
   });
+}
+
+// ─── Releases ─────────────────────────────────────────────────────────────────
+
+/** Task types that never reach #releases — internal work nobody outside asked for. */
+const RELEASE_EXCLUDED_TASK_TYPES = ["🔧 Chore"];
+
+/**
+ * Normalizes the first entry of the "Video release" property. Despite the column
+ * name it takes a screenshot just as happily as a clip.
+ *
+ * Notion serves uploaded files behind a signed URL that expires in about an hour,
+ * so a `hosted` file has to be downloaded and re-uploaded to Discord — linking to
+ * it would post a URL that dies the same afternoon. An `external` entry (Loom,
+ * YouTube, Drive, an image URL) is permanent and can be used as-is.
+ */
+function readReleaseMedia(page) {
+  const entry = (page.properties?.[PROP.RELEASE_VIDEO]?.files ?? [])[0];
+  if (!entry) return null;
+
+  const name = entry.name ?? null;
+  return entry.type === "external"
+    ? { kind: "external", url: entry.external.url, name }
+    : { kind: "hosted", url: entry.file.url, name };
+}
+
+/**
+ * The release copy stored on the page when it was announced: first line the
+ * headline, the rest the summary. Kept as one readable column instead of two, and
+ * it is what the Friday digest reuses so the wording matches the release message.
+ */
+function readStoredNote(page) {
+  const stored = getRichText(page, PROP.RELEASE_SUMMARY).trim();
+  if (!stored) return null;
+
+  const [headline, ...rest] = stored.split("\n");
+  return {
+    headline: headline.trim(),
+    summary: rest.join("\n").trim(),
+    details: [],
+  };
+}
+
+/** Shapes a Notion page into the ticket the release messages are built from. */
+function mapReleaseTicket(page) {
+  const description = getRichText(page, PROP.DESCRIPTION);
+
+  return {
+    pageId: page.id,
+    title: getPageTitle(page) ?? "(sin título)",
+    url: page.url,
+    // Used as a "has anyone stopped touching this?" signal before announcing it.
+    lastEditedTime: page.last_edited_time ?? null,
+    status: page.properties?.[PROP.STATUS]?.status?.name ?? null,
+    taskType: page.properties?.[PROP.TASK_TYPE]?.select?.name ?? null,
+    areas: (page.properties?.[PROP.AREA]?.multi_select ?? []).map((o) => o.name),
+    completedAt: page.properties?.[PROP.COMPLETED]?.date?.start ?? null,
+    threadUrl: description.match(/Discord thread:\s*(\S+)/)?.[1] ?? null,
+    reporterName: description.match(/Reported by:\s*([^\n(]+)/)?.[1]?.trim() ?? null,
+    reporterNotionId: page.properties?.[PROP.REPORTER]?.people?.[0]?.id ?? null,
+    reporterNotionName: page.properties?.[PROP.REPORTER]?.people?.[0]?.name ?? null,
+    // Whoever did the work. Carries the Notion id so it can be turned into a
+    // Discord tag through the identity table.
+    assignees: (page.properties?.[PROP.ASSIGNEE]?.people ?? []).map((u) => ({
+      notionId: u.id,
+      name: u.name ?? null,
+    })),
+    descriptionText: description,
+    media: readReleaseMedia(page),
+    releaseMessageUrl: page.properties?.[PROP.RELEASE_MESSAGE]?.url ?? null,
+    storedNote: readStoredNote(page),
+  };
+}
+
+/** Filter clauses for "status is in the Complete group". */
+function completedFilter(db) {
+  return {
+    or: completeStatusNames(db).map((name) => ({
+      property: PROP.STATUS,
+      status: { equals: name },
+    })),
+  };
+}
+
+/**
+ * Filter clauses excluding the task types that don't belong in #releases.
+ * `does_not_equal` also keeps pages with no task type at all, which is what we
+ * want — an untyped ticket is still something that shipped.
+ */
+function excludedTaskTypeFilters() {
+  return RELEASE_EXCLUDED_TASK_TYPES.map((taskType) => ({
+    property: PROP.TASK_TYPE,
+    select: { does_not_equal: taskType },
+  }));
+}
+
+/**
+ * Makes sure the release columns exist in the database.
+ *
+ * As with "Discord notificado", the first time the published flag is created every
+ * already-completed ticket is back-filled as published — otherwise switching the
+ * feature on would dump months of history into #releases at once.
+ *
+ * @returns {Promise<{created: string[], backfilled: number}>}
+ */
+export async function ensureReleaseProperties() {
+  const db = await notion.databases.retrieve({ database_id: DATABASE_ID });
+
+  const missing = {};
+  if (!db.properties[PROP.RELEASE_VIDEO]) missing[PROP.RELEASE_VIDEO] = { files: {} };
+  if (!db.properties[PROP.RELEASE_MESSAGE]) missing[PROP.RELEASE_MESSAGE] = { url: {} };
+  if (!db.properties[PROP.RELEASE_SUMMARY]) {
+    missing[PROP.RELEASE_SUMMARY] = { rich_text: {} };
+  }
+
+  const isFirstRun = !db.properties[PROP.RELEASE_PUBLISHED];
+  if (isFirstRun) missing[PROP.RELEASE_PUBLISHED] = { checkbox: {} };
+
+  const created = Object.keys(missing);
+  if (created.length > 0) {
+    await notion.databases.update({
+      database_id: DATABASE_ID,
+      properties: missing,
+    });
+    console.log(`[Notion] Propiedades creadas: ${created.join(", ")}`);
+  }
+
+  if (!isFirstRun) return { created, backfilled: 0 };
+
+  const pages = await queryAll(completedFilter(db));
+  for (const page of pages) {
+    await markReleasePublished(page.id);
+  }
+
+  console.log(
+    `[Notion] ${pages.length} ticket(s) ya completados marcados como publicados (back-fill inicial).`
+  );
+  return { created, backfilled: pages.length };
+}
+
+/** Completed tickets that still have to be announced in #releases. */
+export async function fetchUnpublishedReleases() {
+  const db = await notion.databases.retrieve({ database_id: DATABASE_ID });
+
+  const pages = await queryAll({
+    and: [
+      completedFilter(db),
+      { property: PROP.RELEASE_PUBLISHED, checkbox: { equals: false } },
+      ...excludedTaskTypeFilters(),
+    ],
+  });
+
+  return pages.map(mapReleaseTicket);
+}
+
+/**
+ * Tickets completed within a date range, for the weekly digest.
+ * `Completed` is a date-only property, so both bounds are YYYY-MM-DD and inclusive.
+ */
+export async function fetchReleasesCompletedBetween(startDate, endDate) {
+  const db = await notion.databases.retrieve({ database_id: DATABASE_ID });
+
+  const pages = await queryAll({
+    and: [
+      completedFilter(db),
+      { property: PROP.COMPLETED, date: { on_or_after: startDate } },
+      { property: PROP.COMPLETED, date: { on_or_before: endDate } },
+      ...excludedTaskTypeFilters(),
+    ],
+  });
+
+  return pages
+    .map(mapReleaseTicket)
+    .sort(
+      (a, b) =>
+        (a.completedAt ?? "").localeCompare(b.completedAt ?? "") ||
+        a.title.localeCompare(b.title)
+    );
+}
+
+/**
+ * The page body as plain text, used as extra context for the release summary.
+ * Only top-level blocks are read — the detail lives in the first screen of the
+ * ticket, and recursing into children would cost a request per nested block.
+ */
+export async function fetchPageText(pageId, { maxLines = 60 } = {}) {
+  const lines = [];
+  let cursor;
+
+  do {
+    const res = await notion.blocks.children.list({
+      block_id: pageId,
+      page_size: 100,
+      start_cursor: cursor,
+    });
+
+    for (const block of res.results) {
+      const richText = block[block.type]?.rich_text;
+      if (!Array.isArray(richText)) continue;
+
+      const text = richText.map((t) => t.plain_text).join("").trim();
+      if (!text) continue;
+
+      lines.push(block.type.startsWith("heading") ? `## ${text}` : text);
+      if (lines.length >= maxLines) return lines.join("\n");
+    }
+
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+
+  return lines.join("\n");
+}
+
+/**
+ * Marks a ticket as announced, keeping the link to its message in #releases and
+ * the copy that was published, which the weekly digest reads back.
+ */
+export async function markReleasePublished(pageId, { messageUrl, note } = {}) {
+  const properties = { [PROP.RELEASE_PUBLISHED]: { checkbox: true } };
+
+  if (messageUrl) properties[PROP.RELEASE_MESSAGE] = { url: messageUrl };
+
+  if (note?.summary) {
+    // Notion caps a rich_text chunk at 2000 characters.
+    const content = `${note.headline}\n${note.summary}`.slice(0, 1900);
+    properties[PROP.RELEASE_SUMMARY] = { rich_text: [{ text: { content } }] };
+  }
+
+  await notion.pages.update({ page_id: pageId, properties });
 }

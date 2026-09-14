@@ -2,6 +2,8 @@ import "dotenv/config";
 import { Client, GatewayIntentBits, Collection } from "discord.js";
 import * as ticketCommand from "./commands/ticket.js";
 import { startCompletionWatcher } from "./services/completion-watcher.js";
+import { startReleaseWatcher } from "./services/release-watcher.js";
+import { startWeeklyDigest } from "./services/weekly-digest.js";
 
 // ─── Bot Setup ────────────────────────────────────────────────────────────────
 const client = new Client({
@@ -23,6 +25,12 @@ client.once("ready", async () => {
 
   // Announces in Discord every bug that reaches a completed status in Notion.
   await startCompletionWatcher(client);
+
+  // Publishes every finished ticket in #releases, with its video when it has one.
+  const releasesReady = await startReleaseWatcher(client);
+
+  // The Friday round-up only makes sense once the release columns exist.
+  if (releasesReady) await startWeeklyDigest(client);
 });
 
 client.on("interactionCreate", async (interaction) => {

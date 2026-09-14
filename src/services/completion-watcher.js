@@ -1,13 +1,11 @@
 import { EmbedBuilder } from "discord.js";
-import {
-  linkByDiscordUsername,
-  linkByNotionId,
-} from "../config/user-links.js";
+import { resolveDiscordId } from "./discord-identity.js";
 import {
   ensureNotifiedProperty,
   fetchCompletedUnnotifiedTickets,
   markTicketNotified,
 } from "./notion.js";
+import { resolveTextChannel } from "./discord-channels.js";
 
 const DEFAULT_INTERVAL_MINUTES = 5;
 
@@ -52,38 +50,16 @@ const GONE_ERROR_CODES = new Set([
  */
 const givenUp = new Set();
 
-/** Resolved once per process — the channel lookup is a guild-wide fetch. */
-let fallbackChannelPromise = null;
-
-/** Discord username (lowercased) -> user id, or null when the lookup came up empty. */
-const reporterIdCache = new Map();
-
 /**
  * The #bug-reports channel, where tickets without a thread are announced.
  * Uses DISCORD_BUG_CHANNEL_ID when set, otherwise looks the channel up by name.
  */
 function getFallbackChannel(client) {
-  fallbackChannelPromise ??= (async () => {
-    const configuredId = process.env.DISCORD_BUG_CHANNEL_ID;
-    if (configuredId) return client.channels.fetch(configuredId);
-
-    const guild = await client.guilds.fetch(process.env.DISCORD_GUILD_ID);
-    const channels = await guild.channels.fetch();
-    return (
-      channels.find(
-        (c) => c?.name === FALLBACK_CHANNEL_NAME && c.isTextBased?.()
-      ) ?? null
-    );
-  })().catch((error) => {
-    console.error(
-      `[Watcher] No se pudo resolver el canal #${FALLBACK_CHANNEL_NAME}:`,
-      error.message
-    );
-    fallbackChannelPromise = null; // let the next poll retry
-    return null;
+  return resolveTextChannel({
+    client,
+    channelId: process.env.DISCORD_BUG_CHANNEL_ID || null,
+    channelName: FALLBACK_CHANNEL_NAME,
   });
-
-  return fallbackChannelPromise;
 }
 
 function pollIntervalMs() {
@@ -131,56 +107,13 @@ function buildEmbed(ticket, { inThread }) {
   return embed;
 }
 
-/**
- * The Discord id to @mention, best source first:
- *
- *   1. the id the bot stored on the ticket        — tickets created with /ticket
- *   2. the identity table, via Notion's Reporter  — tickets opened by hand in Notion
- *   3. the identity table, via the username
- *   4. a guild search by username                 — someone not in the table yet
- *
- * Returns null when none of them land, and the announcement degrades to plain text
- * rather than pinging the wrong person.
- */
-async function resolveReporterDiscordId(client, ticket) {
-  if (ticket.reporterDiscordId) return ticket.reporterDiscordId;
-
-  const fromNotion = linkByNotionId(ticket.reporterNotionId)?.discordId;
-  if (fromNotion) return fromNotion;
-
-  const fromUsername = linkByDiscordUsername(ticket.reporterName)?.discordId;
-  if (fromUsername) return fromUsername;
-
-  const name = ticket.reporterName?.trim();
-  if (!name) return null;
-
-  const key = name.toLowerCase();
-  if (reporterIdCache.has(key)) return reporterIdCache.get(key);
-
-  let id = null;
-  try {
-    const guild = await client.guilds.fetch(process.env.DISCORD_GUILD_ID);
-    const members = await guild.members.search({ query: name, limit: 10 });
-    // Exact match only: `search` is a prefix search, and a near-miss would ping
-    // the wrong person.
-    const hit =
-      members.find((m) => m.user.username.toLowerCase() === key) ??
-      members.find((m) => m.displayName?.toLowerCase() === key);
-    id = hit?.id ?? null;
-
-    if (!id) {
-      console.warn(
-        `[Watcher] "${name}" no coincide con ningún miembro del server — aviso sin etiqueta.`
-      );
-    }
-  } catch (error) {
-    console.warn(
-      `[Watcher] Falló la búsqueda de "${name}" en el server: ${error.message}`
-    );
-  }
-
-  reporterIdCache.set(key, id);
-  return id;
+/** The Discord id to @mention for whoever reported the ticket, or null. */
+function resolveReporterDiscordId(client, ticket) {
+  return resolveDiscordId(client, {
+    discordId: ticket.reporterDiscordId,
+    notionId: ticket.reporterNotionId,
+    name: ticket.reporterName,
+  });
 }
 
 /**

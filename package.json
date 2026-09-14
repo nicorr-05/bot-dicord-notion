@@ -1,8 +1,11 @@
 {
   "name": "discord-bug-tracker",
   "version": "1.0.0",
-  "description": "Discord bot that converts bug-reports threads into Notion tickets using OpenAI",
+  "description": "Discord bot that turns #bug-reports threads into Notion tickets and announces finished ones in #releases",
   "main": "src/index.js",
+  "engines": {
+    "node": ">=18"
+  },
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
