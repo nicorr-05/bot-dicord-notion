@@ -1,6 +1,5 @@
 import {
   SlashCommandBuilder,
-  ChannelType,
   ActionRowBuilder,
   StringSelectMenuBuilder,
   ButtonBuilder,
@@ -9,70 +8,33 @@ import {
 } from "discord.js";
 import { analyzeThread } from "../services/openai.js";
 import {
+  addTicketComment,
   createTicket,
   fetchTicketOptions,
+  findSimilarTickets,
   resolveReporterId,
 } from "../services/notion.js";
+import { describeError } from "../lib/errors.js";
+import { verdictLabel } from "../lib/duplicates.js";
+import { checkTicketChannel } from "../lib/channels.js";
+import {
+  fetchAllMessages,
+  hasEnoughDescription,
+  insufficientDescriptionMessage,
+  replyEphemerallyAfterDefer,
+} from "../lib/thread.js";
 
 export const data = new SlashCommandBuilder()
   .setName("ticket")
   .setDescription("Converts this bug-report thread into a Notion ticket using AI");
 
-/**
- * Fetches all messages from a thread (handles Discord's 100-msg pagination limit).
- */
-async function fetchAllMessages(thread) {
-  const allMessages = [];
-  let lastId = null;
-
-  while (true) {
-    const options = { limit: 100 };
-    if (lastId) options.before = lastId;
-
-    const batch = await thread.messages.fetch(options);
-    if (batch.size === 0) break;
-
-    allMessages.push(...batch.values());
-    lastId = batch.last().id;
-
-    if (batch.size < 100) break;
-  }
-
-  return allMessages
-    .filter((m) => !m.author.bot && !m.content.startsWith("/"))
-    .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-    .map((m) => ({
-      author: m.author.username,
-      content: m.content,
-      attachments: [...m.attachments.values()].map((a) => ({
-        url: a.url,
-        name: a.name,
-        contentType: a.contentType || "",
-      })),
-    }));
-}
-
 export async function execute(interaction) {
   const channel = interaction.channel;
 
-  // Must be run inside a thread
-  if (
-    channel.type !== ChannelType.PublicThread &&
-    channel.type !== ChannelType.PrivateThread
-  ) {
-    return interaction.reply({
-      content: "❌ This command must be used inside a thread in **#bug-reports**.",
-      ephemeral: true,
-    });
-  }
-
-  // Enforce bug-reports channel
-  const parentChannel = channel.parent;
-  if (parentChannel?.name !== "bug-reports") {
-    return interaction.reply({
-      content: `❌ This command only works in threads under **#bug-reports**. This thread is under **#${parentChannel?.name}**.`,
-      ephemeral: true,
-    });
+  // Must be run inside a thread under #bug-reports (feature requests go to /feature)
+  const allowed = checkTicketChannel(channel);
+  if (!allowed.ok) {
+    return interaction.reply({ content: allowed.message, ephemeral: true });
   }
 
   await interaction.deferReply();
@@ -82,6 +44,9 @@ export async function execute(interaction) {
     const messages = await fetchAllMessages(channel);
     if (messages.length === 0) {
       return interaction.editReply("❌ No messages found in this thread to analyze.");
+    }
+    if (!hasEnoughDescription(messages)) {
+      return replyEphemerallyAfterDefer(interaction, insufficientDescriptionMessage("bug"));
     }
 
     // 2. Analyze with AI + fetch Notion options in parallel
@@ -99,6 +64,15 @@ export async function execute(interaction) {
       ) ??
       options.priorityOptions.find((p) => p.toLowerCase() === "medium") ??
       options.priorityOptions[0];
+
+    // Is this bug already reported? Never blocks creating a new ticket.
+    await interaction.editReply("🔎 Looking for similar open tickets...");
+    let matches = [];
+    try {
+      matches = await findSimilarTickets(analysis);
+    } catch (error) {
+      console.warn("[/ticket] Duplicate search failed:", error);
+    }
 
     // 3. Collect all attachments from the thread
     const allAttachments = messages.flatMap((m) => m.attachments || []);
@@ -215,11 +189,19 @@ export async function execute(interaction) {
         .addOptions(reporterChoices)
     );
 
+    // One "same as" button per likely duplicate (max 3), so the five-row limit
+    // still fits the four menus.
     const buttonRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`ticket_create_${userId}`)
         .setLabel("✅ Create Ticket")
         .setStyle(ButtonStyle.Success),
+      ...matches.map((m, index) =>
+        new ButtonBuilder()
+          .setCustomId(`ticket_same_${index}_${userId}`)
+          .setLabel(`🔗 Same as: ${m.title}`.slice(0, 80))
+          .setStyle(ButtonStyle.Primary)
+      ),
       new ButtonBuilder()
         .setCustomId(`ticket_cancel_${userId}`)
         .setLabel("❌ Cancel")
@@ -245,6 +227,24 @@ export async function execute(interaction) {
         { name: "📎 Evidence found", value: evidenceSummary }
       )
       .setFooter({ text: `${messages.length} messages analyzed · Select options and click Create Ticket` });
+
+    if (matches.length > 0) {
+      const list = matches
+        .map(
+          (m) =>
+            `${verdictLabel(m.verdict)} · [${m.title}](${m.url}) — ${m.status ?? "no status"}` +
+            (m.reason ? `\n  ↳ ${m.reason}` : "")
+        )
+        .join("\n");
+      embed.addFields({
+        name: "🔁 Already reported? — possible duplicates",
+        value: (
+          list +
+          "\n\n**Different bug?** → Create Ticket.\n" +
+          "**New case of the same bug?** → 🔗 Same as… (adds this report as a comment)."
+        ).slice(0, 1024),
+      });
+    }
 
     const reply = await interaction.editReply({
       embeds: [embed],
@@ -316,6 +316,34 @@ export async function execute(interaction) {
             `**Notion:** ${notionPage.url}\n\n` +
             `*${messages.length} messages analyzed.*`
         );
+      } else if (i.customId.startsWith("ticket_same_")) {
+        collector.stop("merged");
+        await i.deferUpdate();
+        const target = matches[Number(i.customId.split("_")[2])];
+        await interaction.editReply({
+          content: "🔗 Adding this report to the existing ticket...",
+          embeds: [],
+          components: [],
+        });
+
+        try {
+          await addTicketComment(target.id, {
+            analysis,
+            reporterName: interaction.user.username,
+            threadUrl: `https://discord.com/channels/${interaction.guildId}/${channel.id}`,
+            evidenceSummary: allAttachments.length > 0 ? evidenceSummary : null,
+          });
+          await interaction.editReply(
+            `🔗 **Added as a new case of an existing ticket**\n\n` +
+              `**Ticket:** ${target.title}\n` +
+              `**Status:** ${target.status ?? "—"}\n` +
+              `This thread's report was added as a comment on the page.\n` +
+              `**Notion:** ${target.url}`
+          );
+        } catch (error) {
+          console.error("[/ticket] Error adding to existing ticket:", error);
+          await interaction.editReply(describeError(error, { target: "la base de tickets" }));
+        }
       } else if (i.customId === `ticket_cancel_${userId}`) {
         collector.stop("cancelled");
         await i.deferUpdate();

@@ -1,9 +1,11 @@
 import "dotenv/config";
 import { Client, GatewayIntentBits, Collection } from "discord.js";
 import * as ticketCommand from "./commands/ticket.js";
+import * as featureCommand from "./commands/feature.js";
 import { startCompletionWatcher } from "./services/completion-watcher.js";
 import { startReleaseWatcher } from "./services/release-watcher.js";
 import { startWeeklyDigest } from "./services/weekly-digest.js";
+import { startIdentitySync } from "./services/identity-sync.js";
 
 // ─── Bot Setup ────────────────────────────────────────────────────────────────
 const client = new Client({
@@ -17,11 +19,17 @@ const client = new Client({
 // Register commands in a collection
 client.commands = new Collection();
 client.commands.set(ticketCommand.data.name, ticketCommand);
+client.commands.set(featureCommand.data.name, featureCommand);
 
 // ─── Events ───────────────────────────────────────────────────────────────────
 client.once("ready", async () => {
   console.log(`✅ Bot ready! Logged in as ${client.user.tag}`);
   console.log(`📋 Watching for /ticket commands in #bug-reports threads`);
+  console.log(`💡 Watching for /feature commands in feature-request threads`);
+
+  // Pairs new teammates across Notion and Discord and reports who is left unlinked.
+  // Not awaited: it takes a few seconds and nothing below depends on it.
+  startIdentitySync(client);
 
   // Announces in Discord every bug that reaches a completed status in Notion.
   await startCompletionWatcher(client);

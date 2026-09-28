@@ -10,10 +10,13 @@
  * `discordId: null` is a known person we simply can't ping yet — the bot degrades
  * to plain text instead of guessing.
  *
- * To add someone: their Notion id comes from `GET https://api.notion.com/v1/users`,
- * their Discord id from right-clicking the user with Developer Mode on.
+ * To add someone: run `npm run users:audit` — it lists who is missing and prints the
+ * rows to paste here. The bot also runs that audit on startup and once a day,
+ * pairs people whose names match exactly on both sides (in memory), and reports
+ * the rest in DISCORD_ADMIN_CHANNEL_ID.
  */
 export const USER_LINKS = [
+  // Ya no está en el workspace de Notion; se conserva para etiquetarlo en sus tickets viejos.
   {
     notionId: "05d0c0ff-90f7-4502-81c3-93b27badf814",
     notionName: "miguel luzardo",
@@ -39,12 +42,6 @@ export const USER_LINKS = [
     discordUsername: "cesar.docguia",
   },
   {
-    notionId: "325d872b-594c-81b8-a0e7-0002445a69b2",
-    notionName: "gley ortiz",
-    discordId: "771968766367105035",
-    discordUsername: "gleydery",
-  },
-  {
     notionId: "34ad872b-594c-81f8-b265-00023df8e12a",
     notionName: "Diana Rivas",
     discordId: "779123703333650493",
@@ -62,7 +59,6 @@ export const USER_LINKS = [
     discordId: "571451285111439382",
     discordUsername: "develat12.",
   },
-  // ⚠️ Inferidos por nombre visible, no por coincidencia exacta — confirmar.
   {
     notionId: "88a6d54a-5008-4372-90c4-55bf53e28d1b",
     notionName: "carlos parra",
@@ -81,18 +77,17 @@ export const USER_LINKS = [
     discordId: "1352312584086360105",
     discordUsername: "fran053477",
   },
-  // ⚠️ Sin pareja conocida — rellenar cuando se sepa.
   {
-    notionId: "364d872b-594c-8183-8df9-00029cb04ae8",
-    notionName: "Valentin Fuentes",
-    discordId: null,
-    discordUsername: null,
+    notionId: "3dbd872b-594c-81b6-9a2b-0002f5ffc20e",
+    notionName: "sadiel matus",
+    discordId: "750826639960834070",
+    discordUsername: "sadiel.matus",
   },
   {
-    notionId: null,
-    notionName: null,
-    discordId: "1512257981272817865",
-    discordUsername: "andrespasante",
+    notionId: "3ddd872b-594c-81a9-9f8c-0002c1f83c70",
+    notionName: "Yender Alvarez",
+    discordId: "1549859119207288882",
+    discordUsername: "yenderdevdocguia",
   },
 ];
 
@@ -100,11 +95,24 @@ const byDiscordId = new Map();
 const byNotionId = new Map();
 const byDiscordUsername = new Map();
 
-for (const link of USER_LINKS) {
+function index(link) {
   if (link.discordId) byDiscordId.set(link.discordId, link);
   if (link.notionId) byNotionId.set(link.notionId, link);
   if (link.discordUsername) {
     byDiscordUsername.set(link.discordUsername.toLowerCase(), link);
+  }
+}
+
+USER_LINKS.forEach(index);
+
+/**
+ * Adds links found at runtime (see services/identity-sync.js). They live in memory
+ * only; a row in USER_LINKS always wins over one added here.
+ */
+export function registerRuntimeLinks(links) {
+  for (const link of links) {
+    if (byDiscordId.has(link.discordId) || byNotionId.has(link.notionId)) continue;
+    index(link);
   }
 }
 

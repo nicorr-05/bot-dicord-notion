@@ -1,7 +1,8 @@
-import { Client } from "@notionhq/client";
 import { linkByDiscordId } from "../config/user-links.js";
-
-const notion = new Client({ auth: process.env.NOTION_API_KEY });
+import { notion } from "./notion-client.js";
+import { buildEvidenceBlocks } from "./notion-files.js";
+import { judgeDuplicates } from "./openai.js";
+import { findDuplicates } from "../lib/duplicates.js";
 const DATABASE_ID = process.env.NOTION_DATABASE_ID;
 
 /**
@@ -102,6 +103,27 @@ function getPageTitle(page) {
 }
 
 /**
+ * Workspace members (type === "person"), following pagination — bots and guests
+ * can't be picked as reporter or assignee.
+ */
+export async function listWorkspaceUsers() {
+  const users = [];
+  let cursor;
+
+  do {
+    const res = await notion.users.list({ start_cursor: cursor, page_size: 100 });
+    users.push(
+      ...res.results
+        .filter((u) => u.type === "person")
+        .map((u) => ({ id: u.id, name: u.name }))
+    );
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+
+  return users;
+}
+
+/**
  * Fetches dynamic options from Notion for the ticket form:
  * - Priority select options
  * - Sprint options (relation / select / multi_select are all supported)
@@ -110,9 +132,9 @@ function getPageTitle(page) {
  * Also returns `sprintType` so createTicket doesn't have to re-fetch the schema.
  */
 export async function fetchTicketOptions() {
-  const [db, usersRes] = await Promise.all([
+  const [db, workspaceUsers] = await Promise.all([
     notion.databases.retrieve({ database_id: DATABASE_ID }),
-    notion.users.list({}),
+    listWorkspaceUsers(),
   ]);
 
   // Priority — from select property schema
@@ -169,10 +191,7 @@ export async function fetchTicketOptions() {
     }));
   }
 
-  // Assignee — workspace members only (type === "person")
-  let userOptions = usersRes.results
-    .filter((u) => u.type === "person")
-    .map((u) => ({ id: u.id, name: u.name }));
+  let userOptions = workspaceUsers;
 
   // Only honour the configured default if that user still exists in the workspace,
   // and float it to the top so it survives Discord's 25-option cap.
@@ -274,6 +293,21 @@ export async function createTicket(ticket) {
     properties[PROP.REPORTER] = { people: [{ object: "user", id: reporterId }] };
   }
 
+  // Files are re-uploaded to Notion: Discord's CDN links expire within a day.
+  const evidenceBlocks =
+    attachments.length > 0
+      ? [
+          {
+            object: "block",
+            type: "heading_2",
+            heading_2: {
+              rich_text: [{ text: { content: "Evidence" } }],
+            },
+          },
+          ...(await buildEvidenceBlocks(attachments)),
+        ]
+      : [];
+
   const response = await notion.pages.create({
     parent: { database_id: DATABASE_ID },
     properties,
@@ -333,53 +367,88 @@ export async function createTicket(ticket) {
         },
       },
       // Evidence section — only added if there are attachments
-      ...(attachments.length > 0
-        ? [
-            {
-              object: "block",
-              type: "heading_2",
-              heading_2: {
-                rich_text: [{ text: { content: "Evidence" } }],
-              },
-            },
-            ...attachments.map((a) => {
-              const type = a.contentType || "";
-              if (type.startsWith("image/")) {
-                return {
-                  object: "block",
-                  type: "image",
-                  image: { type: "external", external: { url: a.url } },
-                };
-              } else if (type.startsWith("video/")) {
-                return {
-                  object: "block",
-                  type: "video",
-                  video: { type: "external", external: { url: a.url } },
-                };
-              } else {
-                // Generic file — add as a link paragraph
-                return {
-                  object: "block",
-                  type: "paragraph",
-                  paragraph: {
-                    rich_text: [
-                      {
-                        text: {
-                          content: `📎 ${a.name}`,
-                          link: { url: a.url },
-                        },
-                      },
-                    ],
-                  },
-                };
-              }
-            }),
-          ]
-        : []),
+      ...evidenceBlocks,
     ],
   });
 
   return { id: response.id, url: response.url };
+}
+
+// ─── Duplicates ───────────────────────────────────────────────────────────────
+
+/** Bug tickets that aren't finished yet — the only ones a new report can join. */
+export async function fetchOpenBugTickets() {
+  const db = await notion.databases.retrieve({ database_id: DATABASE_ID });
+
+  const pages = await queryAll({
+    and: [
+      { property: PROP.TASK_TYPE, select: { equals: BUG_TASK_TYPE } },
+      ...completeStatusNames(db).map((name) => ({
+        property: PROP.STATUS,
+        status: { does_not_equal: name },
+      })),
+    ],
+  });
+
+  return pages.map((page) => {
+    const title = getPageTitle(page) ?? "(sin título)";
+    return {
+      id: page.id,
+      url: page.url,
+      title,
+      status: page.properties?.[PROP.STATUS]?.status?.name ?? null,
+      text: title,
+    };
+  });
+}
+
+/**
+ * Open bug tickets the AI considers the same bug as this analysis, each with a
+ * `reason`. Tickets are shortlisted by title, then the AI reads the first lines of
+ * each shortlisted page — the description lives in the body, not in a property.
+ */
+export async function findSimilarTickets(analysis, { judge = judgeDuplicates } = {}) {
+  const tickets = await fetchOpenBugTickets();
+  const { matches } = await findDuplicates({
+    candidate: {
+      title: analysis.title,
+      summary: `${analysis.description}\n${analysis.stepsToReproduce ?? ""}`,
+    },
+    items: tickets,
+    enrich: (shortlist) =>
+      Promise.all(
+        shortlist.map(async (t) => ({
+          ...t,
+          text: `${t.title}\n${await fetchPageText(t.id, { maxLines: 15 })}`,
+        }))
+      ),
+    judge: judge && ((args) => judge({ kind: "bug", ...args })),
+  });
+  return matches;
+}
+
+/** The comment a new report leaves on the ticket it turned out to duplicate. */
+export function buildTicketCaseComment({ analysis, reporterName, threadUrl, evidenceSummary }) {
+  const text =
+    `➕ New case of this bug from Discord — reported by ${reporterName}\n\n` +
+    `${analysis.description}\n\n` +
+    `Steps to reproduce:\n${analysis.stepsToReproduce || "Not specified"}\n` +
+    (evidenceSummary ? `\nEvidence in the thread: ${evidenceSummary}\n` : "") +
+    `\nDiscord thread: `;
+
+  const content = text.length > 1800 ? `${text.slice(0, 1799)}…` : text;
+  return [
+    { type: "text", text: { content } },
+    { type: "text", text: { content: threadUrl, link: { url: threadUrl } } },
+  ];
+}
+
+/** Adds a new report to an existing ticket as a page comment. */
+export async function addTicketComment(pageId, details) {
+  await notion.comments.create({
+    parent: { page_id: pageId },
+    rich_text: buildTicketCaseComment(details),
+  });
 }
 
 // ─── Completion notifications ─────────────────────────────────────────────────
