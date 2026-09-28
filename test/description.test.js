@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  GUIDE_URL,
+  BUG_GUIDE_URL,
+  guideUrl,
   hasEnoughDescription,
   insufficientDescriptionMessage,
 } from "../src/lib/thread.js";
@@ -40,7 +41,7 @@ test("el mensaje de descripción insuficiente enlaza la guía", () => {
   assert.match(insufficientDescriptionMessage("feature"), /solicitud/);
   assert.match(insufficientDescriptionMessage("bug"), /bug/);
   for (const kind of ["feature", "bug"]) {
-    assert.ok(insufficientDescriptionMessage(kind).includes(GUIDE_URL));
+    assert.ok(insufficientDescriptionMessage(kind).includes(guideUrl(kind)));
   }
 });
 
@@ -57,7 +58,7 @@ test("/ticket también rechaza un thread sin texto, de forma efímera y sin llam
   assert.equal(calls.deleteReply, 1, "borra la respuesta pública diferida");
   assert.equal(calls.followUp.length, 1);
   assert.equal(calls.followUp[0].ephemeral, true);
-  assert.ok(calls.followUp[0].content.includes(GUIDE_URL));
+  assert.ok(calls.followUp[0].content.includes(BUG_GUIDE_URL));
   assert.ok(
     !calls.editReply.some((m) => String(m).includes("Analyzing")),
     "no llega a la IA"

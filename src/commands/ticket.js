@@ -6,7 +6,7 @@ import {
   ButtonStyle,
   EmbedBuilder,
 } from "discord.js";
-import { analyzeThread } from "../services/openai.js";
+import { analyzeThread, precheckReport } from "../services/openai.js";
 import {
   addTicketComment,
   createTicket,
@@ -18,6 +18,13 @@ import { describeError } from "../lib/errors.js";
 import { verdictLabel } from "../lib/duplicates.js";
 import { checkTicketChannel } from "../lib/channels.js";
 import {
+  buildPrecheckBlocks,
+  buildPrecheckComponents,
+  buildPrecheckEmbed,
+  precheckDeclinedMessage,
+  precheckLevel,
+} from "../lib/precheck.js";
+import {
   fetchAllMessages,
   hasEnoughDescription,
   insufficientDescriptionMessage,
@@ -28,7 +35,27 @@ export const data = new SlashCommandBuilder()
   .setName("ticket")
   .setDescription("Converts this bug-report thread into a Notion ticket using AI");
 
-export async function execute(interaction) {
+/** Two steps now (pre-check, then options), so more time than a single review. */
+const REVIEW_TIMEOUT_MS = 5 * 60_000;
+
+const defaultDeps = {
+  fetchAllMessages,
+  analyzeThread,
+  precheckReport,
+  fetchTicketOptions,
+  findSimilarTickets,
+  resolveReporterId,
+  createTicket,
+  addTicketComment,
+};
+
+export function makeExecute(deps = defaultDeps) {
+  return (interaction) => run(interaction, deps);
+}
+
+export const execute = makeExecute();
+
+async function run(interaction, deps) {
   const channel = interaction.channel;
 
   // Must be run inside a thread under #bug-reports (feature requests go to /feature)
@@ -41,7 +68,7 @@ export async function execute(interaction) {
 
   try {
     // 1. Fetch messages
-    const messages = await fetchAllMessages(channel);
+    const messages = await deps.fetchAllMessages(channel);
     if (messages.length === 0) {
       return interaction.editReply("❌ No messages found in this thread to analyze.");
     }
@@ -51,9 +78,14 @@ export async function execute(interaction) {
 
     // 2. Analyze with AI + fetch Notion options in parallel
     await interaction.editReply("🤖 Analyzing thread with AI...");
-    const [analysis, options] = await Promise.all([
-      analyzeThread(channel.name, messages),
-      fetchTicketOptions(),
+    // A failed pre-check only skips step 1; it never blocks the ticket.
+    const [analysis, precheck, options] = await Promise.all([
+      deps.analyzeThread(channel.name, messages),
+      deps.precheckReport("bug", channel.name, messages).catch((error) => {
+        console.warn("[/ticket] Pre-chequeo falló, se omite:", error.message);
+        return null;
+      }),
+      deps.fetchTicketOptions(),
     ]);
 
     // The AI can return a priority that no longer exists in the DB schema —
@@ -69,7 +101,7 @@ export async function execute(interaction) {
     await interaction.editReply("🔎 Looking for similar open tickets...");
     let matches = [];
     try {
-      matches = await findSimilarTickets(analysis);
+      matches = await deps.findSimilarTickets(analysis);
     } catch (error) {
       console.warn("[/ticket] Duplicate search failed:", error);
     }
@@ -91,7 +123,7 @@ export async function execute(interaction) {
 
     // Reporter = whoever ran /ticket. Discord and Notion accounts aren't linked,
     // so match on name (or an explicit env mapping) and let them fix it in the menu.
-    const defaultReporterId = resolveReporterId(
+    const defaultReporterId = deps.resolveReporterId(
       userId,
       [
         interaction.member?.displayName,
@@ -246,19 +278,48 @@ export async function execute(interaction) {
       });
     }
 
-    const reply = await interaction.editReply({
+    // Step 1 asks whether this is really a bug; step 2 is the review above.
+    const review = {
+      content: "",
       embeds: [embed],
       components: [priorityRow, sprintRow, assigneeRow, reporterRow, buttonRow],
-    });
+    };
 
-    // 6. Collect component interactions (2 min timeout)
+    const reply = await interaction.editReply(
+      precheck
+        ? {
+            content: "",
+            embeds: [buildPrecheckEmbed(precheck, { duplicateCount: matches.length })],
+            components: buildPrecheckComponents({ prefix: "ticket", userId, precheck }),
+          }
+        : review
+    );
+
+    // 7. Collect component interactions across both steps
     const collector = reply.createMessageComponentCollector({
       filter: (i) => i.user.id === userId,
-      time: 120_000,
+      time: REVIEW_TIMEOUT_MS,
     });
 
     collector.on("collect", async (i) => {
-      if (i.customId === `ticket_priority_${userId}`) {
+      if (
+        i.customId === `ticket_precheck-yes_${userId}` ||
+        i.customId === `ticket_precheck-no_${userId}`
+      ) {
+        const proceed = i.customId === `ticket_precheck-yes_${userId}`;
+        console.log(
+          `[/ticket] Pre-chequeo: ${precheckLevel(precheck)} (${precheck.classification}), ` +
+            `decisión: ${proceed ? "continuar" : "revisar"}`
+        );
+        await i.deferUpdate();
+        if (proceed) return interaction.editReply(review);
+        collector.stop("declined");
+        return interaction.editReply({
+          content: precheckDeclinedMessage(precheck),
+          embeds: [],
+          components: [],
+        });
+      } else if (i.customId === `ticket_priority_${userId}`) {
         pending.priority = i.values[0];
         await i.deferUpdate();
       } else if (i.customId === `ticket_sprint_${userId}`) {
@@ -280,7 +341,7 @@ export async function execute(interaction) {
         });
 
         const threadUrl = `https://discord.com/channels/${interaction.guildId}/${channel.id}`;
-        const notionPage = await createTicket({
+        const notionPage = await deps.createTicket({
           title: analysis.title,
           description: analysis.description,
           priority: pending.priority,
@@ -293,6 +354,7 @@ export async function execute(interaction) {
           assigneeId: pending.assigneeId,
           reporterId: pending.reporterId,
           attachments: allAttachments,
+          precheckBlocks: buildPrecheckBlocks(precheck),
         });
 
         // Surface sprint/assignee too — both have defaults the reporter may not have touched.
@@ -327,7 +389,7 @@ export async function execute(interaction) {
         });
 
         try {
-          await addTicketComment(target.id, {
+          await deps.addTicketComment(target.id, {
             analysis,
             reporterName: interaction.user.username,
             threadUrl: `https://discord.com/channels/${interaction.guildId}/${channel.id}`,

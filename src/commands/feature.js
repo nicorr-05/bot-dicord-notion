@@ -6,7 +6,7 @@ import {
   ButtonStyle,
   EmbedBuilder,
 } from "discord.js";
-import { analyzeFeatureRequest } from "../services/openai.js";
+import { analyzeFeatureRequest, precheckReport } from "../services/openai.js";
 import { listWorkspaceUsers, resolveReporterId } from "../services/notion.js";
 import {
   addContextComment,
@@ -16,6 +16,13 @@ import {
 import { checkFeatureChannel } from "../lib/channels.js";
 import { describeError } from "../lib/errors.js";
 import { verdictLabel } from "../lib/duplicates.js";
+import {
+  buildPrecheckBlocks,
+  buildPrecheckComponents,
+  buildPrecheckEmbed,
+  precheckDeclinedMessage,
+  precheckLevel,
+} from "../lib/precheck.js";
 import {
   AREA_OPTIONS,
   DEFAULT_ORIGIN,
@@ -48,6 +55,7 @@ const OPTION_MAX = 100;
 const defaultDeps = {
   fetchAllMessages,
   analyzeFeatureRequest,
+  precheckReport,
   listWorkspaceUsers,
   resolveReporterId,
   findSimilarFeatureRequests,
@@ -194,7 +202,7 @@ export function makeExecute(deps = defaultDeps) {
 
     await interaction.deferReply();
 
-    let analysis, users, matches, messages;
+    let analysis, users, matches, messages, precheck;
     try {
       // 1. Read the thread and make sure there is something written to work from.
       messages = await deps.fetchAllMessages(channel);
@@ -202,10 +210,15 @@ export function makeExecute(deps = defaultDeps) {
         return replyEphemerallyAfterDefer(interaction, insufficientDescriptionMessage("feature"));
       }
 
-      // 2. AI draft + Notion users.
+      // 2. AI draft + pre-check against the guide + Notion users. A failed
+      //    pre-check only skips step 1; it never blocks the request.
       await interaction.editReply("🤖 Analizando el thread con IA...");
-      [analysis, users] = await Promise.all([
+      [analysis, precheck, users] = await Promise.all([
         deps.analyzeFeatureRequest(channel.name, messages),
+        deps.precheckReport("feature", channel.name, messages).catch((error) => {
+          console.warn("[/feature] Pre-chequeo falló, se omite:", error.message);
+          return null;
+        }),
         deps.listWorkspaceUsers(),
       ]);
     } catch (error) {
@@ -242,8 +255,8 @@ export function makeExecute(deps = defaultDeps) {
       matchId: matches[0]?.id ?? null,
     };
 
-    // 5. Review & confirm.
-    const reply = await interaction.editReply({
+    // 5. Step 1: does this belong in Notion? Step 2: review & confirm.
+    const review = {
       content: "",
       embeds: [
         buildReviewEmbed({
@@ -255,7 +268,17 @@ export function makeExecute(deps = defaultDeps) {
         }),
       ],
       components: buildReviewComponents({ userId, state, analysis, matches }),
-    });
+    };
+
+    const reply = await interaction.editReply(
+      precheck
+        ? {
+            content: "",
+            embeds: [buildPrecheckEmbed(precheck, { duplicateCount: matches.length })],
+            components: buildPrecheckComponents({ prefix: "feature", userId, precheck }),
+          }
+        : review
+    );
 
     const collector = reply.createMessageComponentCollector({
       filter: (i) => i.user.id === userId,
@@ -272,6 +295,17 @@ export function makeExecute(deps = defaultDeps) {
       else if (action === "area") state.areas = [...i.values];
       else if (action === "platform") state.platform = i.values[0];
       else if (action === "match") state.matchId = i.values[0];
+
+      if (action === "precheck-yes" || action === "precheck-no") {
+        console.log(
+          `[/feature] Pre-chequeo: ${precheckLevel(precheck)} (${precheck.classification}), ` +
+            `decisión: ${action === "precheck-yes" ? "continuar" : "revisar"}`
+        );
+        await i.deferUpdate();
+        if (action === "precheck-yes") return interaction.editReply(review);
+        collector.stop("declined");
+        return finish(precheckDeclinedMessage(precheck));
+      }
 
       if (!["create", "existing", "cancel"].includes(action)) {
         return i.deferUpdate();
@@ -315,6 +349,7 @@ export function makeExecute(deps = defaultDeps) {
           requesterDiscordId: userId,
           threadUrl,
           attachments: evidence.all,
+          precheckBlocks: buildPrecheckBlocks(precheck),
         });
 
         return finish(

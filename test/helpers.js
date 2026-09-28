@@ -31,7 +31,7 @@ function discordBatch(messages) {
 }
 
 /** Records every reply and exposes the component collector so tests can click. */
-export function fakeInteraction(channel) {
+export function fakeInteraction(channel, { prefix = "feature" } = {}) {
   const calls = { reply: [], editReply: [], followUp: [], deleteReply: 0, deferred: false };
   const handlers = {};
   const collector = {
@@ -61,7 +61,7 @@ export function fakeInteraction(channel) {
   /** Simulates a click on a component and waits for its handler to finish. */
   const click = (action, values = []) =>
     handlers.collect({
-      customId: `feature_${action}_${interaction.user.id}`,
+      customId: `${prefix}_${action}_${interaction.user.id}`,
       values,
       deferUpdate: async () => {},
     });

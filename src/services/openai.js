@@ -6,8 +6,29 @@ import {
   PLATFORM_OPTIONS,
   normalizeFeatureAnalysis,
 } from "../lib/feature-requests.js";
+import { CHECKS, CLASSIFICATIONS, normalizePrecheck } from "../lib/precheck.js";
 
-const MODEL = "gpt-4o-mini";
+const DEFAULT_MODEL = "gpt-6-luna";
+
+/** Read on each call so tests and scripts can switch models through the env. */
+function model(purpose) {
+  const specific = purpose === "precheck" ? process.env.OPENAI_PRECHECK_MODEL : null;
+  return specific || process.env.OPENAI_MODEL || DEFAULT_MODEL;
+}
+
+/**
+ * gpt-4o / gpt-4.1 take a temperature. Reasoning models (gpt-5 and later) reject
+ * anything but the default and get the lowest reasoning effort instead: these are
+ * short extraction tasks where waiting for a long chain of thought isn't worth it.
+ * The original gpt-5 family's lowest effort is "minimal"; later ones use "none".
+ */
+export function samplingParams(modelName, temperature) {
+  if (/^gpt-4/.test(modelName)) return { temperature };
+  const effort =
+    process.env.OPENAI_REASONING_EFFORT ||
+    (/^gpt-5(-mini|-nano)?(-\d{4}-\d{2}-\d{2})?$/.test(modelName) ? "minimal" : "none");
+  return { reasoning_effort: effort };
+}
 
 /** Created on first use, so importing this module doesn't require an API key. */
 let openai;
@@ -20,13 +41,14 @@ function client() {
  * Sends a prompt that must be answered with a JSON object and parses it. Failures
  * come back as AIError with a message that can be shown in Discord as-is.
  */
-async function completeJson(prompt, { temperature = 0.2 } = {}) {
+async function completeJson(prompt, { temperature = 0.2, purpose } = {}) {
+  const name = model(purpose);
   let response;
   try {
     response = await client().chat.completions.create({
-      model: MODEL,
+      model: name,
       messages: [{ role: "user", content: prompt }],
-      temperature,
+      ...samplingParams(name, temperature),
       response_format: { type: "json_object" },
     });
   } catch (error) {
@@ -100,6 +122,122 @@ Respond ONLY with valid JSON, no markdown, no extra text.
   }
 
   return result;
+}
+
+const PRECHECK_RUBRIC = {
+  bug: `
+Un bug es cuando Docguía no hace lo que debería, y la causa está en nuestro código,
+servidores o configuración. Deben cumplirse las tres condiciones:
+1. Es una falla de Docguía, no del dispositivo, la red, la cuenta del usuario o un
+   sistema externo (SACS, Apple, Google, WhatsApp, banco).
+2. Hay un comportamiento esperado claro que no se cumple.
+3. Se puede reproducir o hay evidencia concreta (captura del error, hora exacta, usuario).
+
+NO es bug (clasificación entre paréntesis):
+- Registro rechazado porque "los datos no coinciden" (cédula, MPPS, colegio): los datos
+  del SACS no coinciden. Solo es bug si se verificó que coinciden exactamente. (externo)
+- La app no aparece en el App Store: cuenta de Apple en un país sin la app. (externo)
+- El link no abre desde Instagram: navegador interno o tienda en otro país. (entorno)
+- Computadora lenta, se congela, no imprime, micrófono o cámara que no responden en un
+  solo equipo: problema del equipo, drivers o permisos del navegador. (entorno)
+- "No carga" con mala conexión, o funciona en otra red. (entorno)
+- El usuario no sabe cómo hacer algo. (duda_de_uso)
+- "Sería bueno que la app hiciera X". (feature)
+- Olvidó contraseña, cambió de correo, quiere eliminar la cuenta. (cuenta)
+- WhatsApp, Apple, Google, el banco o el SACS caídos. (externo)
+- El usuario ingresó datos incorrectos. (error_usuario)
+
+Señales de que probablemente NO es bug: solo le pasa a un usuario; funciona en otro
+dispositivo, navegador o red; el mensaje de error viene de otro sistema; el sistema
+hace lo que fue diseñado pero al usuario no le gusta.
+
+Señales de que SÍ es bug aunque falten datos: error de nuestro servidor ("Error 500",
+"Error inesperado"), se reprodujo en la cuenta de prueba, afecta a varios médicos,
+datos clínicos o de pacientes equivocados, pérdida de información.`,
+
+  feature: `
+Un feature request es algo que Docguía no hace hoy, o un cambio en algo que ya
+funciona como fue diseñado. Prueba rápida: ¿Docguía fue diseñado para hacer esto y no
+lo hace? Sí → es bug (bug). Nunca lo ha hecho → feature. No es problema de Docguía
+(equipo, red, SACS, App Store) → soporte.
+
+- "Al guardar el recipe sale un error" → bug.
+- "Quiero que el recipe salga con mi logo" → feature.
+- "No me llegan los recordatorios" → bug si la función existe y está activada.
+- "No encuentro dónde exportar mis pacientes" → ya_existe si la función existe; si no, feature.
+- "El botón está muy escondido" → feature (mejora de UX).
+La solicitud debe describir el PROBLEMA del médico, no solo la solución que pidió.`,
+};
+
+const PRECHECK_CHECK_HELP = {
+  bug: `
+  - "descarto_entorno": se probó en otro navegador, modo incógnito, otra red u otro dispositivo.
+  - "reproducible": se reprodujo (idealmente en la cuenta de prueba) o hay evidencia concreta: hora exacta, error textual.
+  - "esperado_vs_actual": queda claro qué debería pasar y qué pasa en realidad.
+  - "contexto": se sabe qué usuario/cuenta, plataforma (Web/iOS/Android) y dispositivo o navegador.
+  - "impacto": frecuencia (siempre/a veces/una vez) y a cuántos usuarios afecta.`,
+  feature: `
+  - "problema": explica el dolor del médico y en qué momento de su trabajo, no solo "quiere X".
+  - "quien": quién lo pide (nombre, especialidad o tipo de cliente).
+  - "hoy": cómo lo resuelve hoy (papel, Excel, otra app, no lo hace).
+  - "consecuencia": qué pasa si no lo tenemos.
+  - "no_existe": el thread dice que se verificó que Docguía no lo hace ya.`,
+};
+
+/**
+ * Checks a thread against the reporting guide before anything is created: is it
+ * really a bug (or a feature request), what's missing, and what to ask first.
+ *
+ * LLMs lean heavily towards calling any report valid, so the prompt spells out the
+ * guide's "not a bug" cases, asks for each check before the verdict, and only
+ * counts what the thread says explicitly.
+ *
+ * @param {"bug"|"feature"} kind
+ * @returns {Promise<ReturnType<typeof normalizePrecheck>>}
+ */
+export async function precheckReport(kind, threadTitle, messages) {
+  const classifications = Object.keys(CLASSIFICATIONS[kind]);
+  const checkIds = CHECKS[kind].map((c) => c.id);
+  const expected = kind === "bug" ? "un bug" : "un feature request";
+
+  const prompt = `
+Eres el líder de Soporte Operativo de DocGuía, un software clínico que usan médicos y
+odontólogos (web y apps iOS/Android: agenda, historia clínica, recipes, informes,
+dictado por voz, pagos, odontograma). Alguien del equipo quiere crear ${expected} en
+Notion a partir de este thread de Discord. Tu trabajo es evitar tickets que no deberían
+existir y guiar a quien reporta sobre qué revisar antes.
+
+Criterio de la guía del equipo:
+${PRECHECK_RUBRIC[kind]}
+
+Título del thread: "${threadTitle}"
+
+Mensajes:
+${formatConversation(messages)}
+
+Devuelve un objeto JSON con estos campos, en este orden:
+- "understood": una frase en español con lo que entendiste que pasa. Sin nombres de pacientes.
+- "checks": objeto con cada uno de ${JSON.stringify(checkIds)} y valor "ok", "parcial" o "falta":${PRECHECK_CHECK_HELP[kind]}
+  "ok" SOLO si el thread lo dice explícitamente. Si no se menciona, es "falta". No supongas.
+- "classification": una de ${JSON.stringify(classifications)}: lo que MÁS PROBABLEMENTE
+  es, según lo que describe el thread. Lo que falta en el reporte ya queda en "checks";
+  no lo uses para decidir la clasificación. Si el caso encaja en uno de los ejemplos
+  de la guía, usa esa clasificación aunque el reporte esté incompleto.
+  Usa "incierto" SOLO si ni siquiera se entiende qué le pasa al usuario o qué pide.
+- "reason": 1 o 2 frases con el porqué de la clasificación, citando lo que dice (o no dice) el thread.
+- "questions": de 1 a 3 preguntas cortas en español que quien reporta debería poder
+  responder antes de crear el ticket, ESPECÍFICAS de este caso, empezando por lo que más
+  descartaría una causa ajena a Docguía. Ejemplo para "al doctor no le funciona el
+  dictado": "¿Probaste el dictado en otro navegador o computadora?", "¿El navegador tiene
+  permiso para usar el micrófono?", "¿El micrófono funciona en otra app, como una nota de voz?".
+  NUNCA preguntes algo que el thread ya responde. Si el reporte está completo, array vacío.
+${kind === "bug" ? `- "cannedReply": "sacs" si es un problema de datos del SACS al registrarse, "app_store" si la
+  app no aparece en la tienda, "conexion" si parece un problema de red o equipo, o null.` : ""}
+Todo en español. Responde SOLO con JSON válido, sin markdown.
+`;
+
+  const raw = await completeJson(prompt, { temperature: 0, purpose: "precheck" });
+  return normalizePrecheck(raw, kind);
 }
 
 /**

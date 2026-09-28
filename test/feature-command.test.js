@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { APIResponseError } from "@notionhq/client";
 import { makeExecute } from "../src/commands/feature.js";
 import { AIError } from "../src/lib/errors.js";
-import { GUIDE_URL } from "../src/lib/thread.js";
+import { FEATURE_GUIDE_URL } from "../src/lib/thread.js";
 import { normalizeFeatureAnalysis } from "../src/lib/feature-requests.js";
 import { WELL_DESCRIBED, fakeInteraction, thread } from "./helpers.js";
 
@@ -34,6 +34,8 @@ function deps(overrides = {}) {
     deps: {
       fetchAllMessages: async () => WELL_DESCRIBED,
       analyzeFeatureRequest: async () => (calls.analyze++, analysis),
+      // No pre-check by default: these tests start at the review step.
+      precheckReport: async () => null,
       listWorkspaceUsers: async () => [{ id: "notion-cesar", name: "César Pérez" }],
       resolveReporterId: (discordId, names, users) => users[0].id,
       findSimilarFeatureRequests: async () => [match],
@@ -60,7 +62,7 @@ test("descripción insuficiente: mensaje efímero con la guía y sin IA", async 
   assert.equal(calls.analyze, 0);
   assert.equal(fake.calls.deleteReply, 1);
   assert.equal(fake.calls.followUp[0].ephemeral, true);
-  assert.ok(fake.calls.followUp[0].content.includes(GUIDE_URL));
+  assert.ok(fake.calls.followUp[0].content.includes(FEATURE_GUIDE_URL));
 });
 
 test("con duplicados, la revisión los muestra con botón y selector de Agregar a existente", async () => {

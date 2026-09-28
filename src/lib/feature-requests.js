@@ -183,9 +183,10 @@ const paragraph = (rich) => ({
 /**
  * Page body: one heading per section, the uploaded files under "Evidencia", and a
  * "Origen" footer with who asked and the Discord thread. The "Discord thread: <url>"
- * line uses the same wording as bug tickets so any tooling can parse both.
+ * line uses the same wording as bug tickets so any tooling can parse both. The
+ * pre-check note, when the reporter went ahead despite a warning, goes last.
  */
-export function buildFeatureBody({ sections, requesterName, requesterDiscordId, threadUrl, evidenceBlocks = [] }) {
+export function buildFeatureBody({ sections, requesterName, requesterDiscordId, threadUrl, evidenceBlocks = [], precheckBlocks = [] }) {
   const blocks = [];
 
   for (const { key, heading: text } of BODY_SECTIONS) {
@@ -202,7 +203,8 @@ export function buildFeatureBody({ sections, requesterName, requesterDiscordId, 
           "\nDiscord thread: "
       ),
       ...richText(threadUrl, threadUrl),
-    ])
+    ]),
+    ...precheckBlocks
   );
 
   return blocks;

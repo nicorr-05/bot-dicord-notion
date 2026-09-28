@@ -245,6 +245,7 @@ export async function createTicket(ticket) {
     assigneeId,
     reporterId,
     attachments = [],
+    precheckBlocks = [],
   } = ticket;
 
   const properties = {
@@ -368,6 +369,8 @@ export async function createTicket(ticket) {
       },
       // Evidence section — only added if there are attachments
       ...evidenceBlocks,
+      // Only when the reporter went ahead despite the AI pre-check's warning
+      ...precheckBlocks,
     ],
   });
 

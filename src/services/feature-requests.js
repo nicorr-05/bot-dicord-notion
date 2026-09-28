@@ -71,7 +71,7 @@ export async function findSimilarFeatureRequests(
  * @returns {Promise<{id: string, url: string, code: string|null}>}
  */
 export async function createFeatureRequest(
-  { analysis, origin, areas, platform, requesterId, requesterName, requesterDiscordId, threadUrl, attachments = [] },
+  { analysis, origin, areas, platform, requesterId, requesterName, requesterDiscordId, threadUrl, attachments = [], precheckBlocks = [] },
   { client = notion, uploadEvidence = buildEvidenceBlocks } = {}
 ) {
   const properties = buildFeatureProperties({
@@ -89,6 +89,7 @@ export async function createFeatureRequest(
     requesterDiscordId,
     threadUrl,
     evidenceBlocks: attachments.length ? await uploadEvidence(attachments) : [],
+    precheckBlocks,
   });
 
   const page = await client.pages.create({

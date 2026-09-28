@@ -4,7 +4,12 @@
  */
 
 /** Where people learn how to write a bug report or a feature request. */
-export const GUIDE_URL = "https://app.notion.com/p/3e98a66068d8812f8aa0e781a63299be";
+export const BUG_GUIDE_URL = "https://app.notion.com/p/3e98a66068d8815d9928c5a054caaee6";
+export const FEATURE_GUIDE_URL = "https://app.notion.com/p/3e98a66068d8812f8aa0e781a63299be";
+
+export function guideUrl(kind) {
+  return kind === "feature" ? FEATURE_GUIDE_URL : BUG_GUIDE_URL;
+}
 
 /** Below this, a thread is "just a screenshot" and the AI would be guessing. */
 const MIN_WORDS = 8;
@@ -108,7 +113,7 @@ export function insufficientDescriptionMessage(kind) {
     `✍️ Este thread no tiene suficiente texto para crear ${what}. ` +
     `Las imágenes, videos o audios ayudan, pero hace falta describirlo por escrito.\n\n` +
     `Escribe ${what} en el thread usando la plantilla de la guía y vuelve a ejecutar el comando:\n` +
-    GUIDE_URL
+    guideUrl(kind)
   );
 }
 
