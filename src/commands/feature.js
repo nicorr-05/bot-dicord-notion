@@ -5,6 +5,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  MessageFlags,
 } from "discord.js";
 import { analyzeFeatureRequest, precheckReport } from "../services/openai.js";
 import { listWorkspaceUsers, resolveReporterId } from "../services/notion.js";
@@ -198,7 +199,7 @@ export function makeExecute(deps = defaultDeps) {
 
     const allowed = checkFeatureChannel(channel);
     if (!allowed.ok) {
-      return interaction.reply({ content: allowed.message, ephemeral: true });
+      return interaction.reply({ content: allowed.message, flags: MessageFlags.Ephemeral });
     }
 
     await interaction.deferReply();

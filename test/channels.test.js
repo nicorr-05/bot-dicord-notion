@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ChannelType } from "discord.js";
+import { ChannelType, MessageFlags } from "discord.js";
 import { checkFeatureChannel, checkTicketChannel } from "../src/lib/channels.js";
 import { makeExecute } from "../src/commands/feature.js";
 import { execute as ticketExecute } from "../src/commands/ticket.js";
@@ -29,7 +29,7 @@ test("/feature fuera del canal responde efímero y no lee el thread", async () =
   await execute(interaction);
 
   assert.equal(calls.reply.length, 1);
-  assert.equal(calls.reply[0].ephemeral, true);
+  assert.equal(calls.reply[0].flags, MessageFlags.Ephemeral);
   assert.equal(calls.deferred, false);
   assert.equal(fetched, false);
 });
@@ -44,7 +44,7 @@ test("/ticket en el canal de features avisa que los bugs van en #bug-reports", a
 
   const { interaction, calls } = fakeInteraction(featureThread);
   await ticketExecute(interaction);
-  assert.equal(calls.reply[0].ephemeral, true);
+  assert.equal(calls.reply[0].flags, MessageFlags.Ephemeral);
   assert.match(calls.reply[0].content, /bug-reports/);
 });
 

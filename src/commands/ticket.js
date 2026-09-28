@@ -5,6 +5,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  MessageFlags,
 } from "discord.js";
 import { analyzeThread, precheckReport } from "../services/openai.js";
 import {
@@ -62,7 +63,7 @@ async function run(interaction, deps) {
   // Must be run inside a thread under #bug-reports (feature requests go to /feature)
   const allowed = checkTicketChannel(channel);
   if (!allowed.ok) {
-    return interaction.reply({ content: allowed.message, ephemeral: true });
+    return interaction.reply({ content: allowed.message, flags: MessageFlags.Ephemeral });
   }
 
   await interaction.deferReply();

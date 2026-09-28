@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { MessageFlags } from "discord.js";
 import { APIResponseError } from "@notionhq/client";
 import { makeExecute } from "../src/commands/feature.js";
 import { AIError } from "../src/lib/errors.js";
@@ -61,7 +62,7 @@ test("descripción insuficiente: mensaje efímero con la guía y sin IA", async 
 
   assert.equal(calls.analyze, 0);
   assert.equal(fake.calls.deleteReply, 1);
-  assert.equal(fake.calls.followUp[0].ephemeral, true);
+  assert.equal(fake.calls.followUp[0].flags, MessageFlags.Ephemeral);
   assert.ok(fake.calls.followUp[0].content.includes(FEATURE_GUIDE_URL));
 });
 

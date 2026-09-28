@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { MessageFlags } from "discord.js";
 import {
   BUG_GUIDE_URL,
   guideUrl,
@@ -57,7 +58,7 @@ test("/ticket también rechaza un thread sin texto, de forma efímera y sin llam
 
   assert.equal(calls.deleteReply, 1, "borra la respuesta pública diferida");
   assert.equal(calls.followUp.length, 1);
-  assert.equal(calls.followUp[0].ephemeral, true);
+  assert.equal(calls.followUp[0].flags, MessageFlags.Ephemeral);
   assert.ok(calls.followUp[0].content.includes(BUG_GUIDE_URL));
   assert.ok(
     !calls.editReply.some((m) => String(m).includes("Analyzing")),

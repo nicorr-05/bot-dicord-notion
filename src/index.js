@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { Client, GatewayIntentBits, Collection } from "discord.js";
+import { Client, GatewayIntentBits, Collection, Events, MessageFlags } from "discord.js";
 import * as ticketCommand from "./commands/ticket.js";
 import * as featureCommand from "./commands/feature.js";
 import { startCompletionWatcher } from "./services/completion-watcher.js";
@@ -22,7 +22,7 @@ client.commands.set(ticketCommand.data.name, ticketCommand);
 client.commands.set(featureCommand.data.name, featureCommand);
 
 // ─── Events ───────────────────────────────────────────────────────────────────
-client.once("ready", async () => {
+client.once(Events.ClientReady, async () => {
   console.log(`✅ Bot ready! Logged in as ${client.user.tag}`);
   console.log(`📋 Watching for /ticket commands in #bug-reports threads`);
   console.log(`💡 Watching for /feature commands in feature-request threads`);
@@ -51,14 +51,24 @@ client.on("interactionCreate", async (interaction) => {
     await command.execute(interaction);
   } catch (error) {
     console.error(`[interactionCreate] Error executing /${interaction.commandName}:`, error);
-    const msg = { content: "❌ An unexpected error occurred.", ephemeral: true };
-    if (interaction.replied || interaction.deferred) {
-      await interaction.followUp(msg);
-    } else {
-      await interaction.reply(msg);
+    const msg = { content: "❌ An unexpected error occurred.", flags: MessageFlags.Ephemeral };
+    // Telling the user can fail too: an interaction older than 3 s (bot restarting,
+    // slow start) is already dead. That must never take the whole bot down.
+    try {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(msg);
+      } else {
+        await interaction.reply(msg);
+      }
+    } catch (replyError) {
+      console.warn(`[interactionCreate] No se pudo avisar del error: ${replyError.message}`);
     }
   }
 });
+
+// Without a listener, an "error" event (e.g. a rejected handler) crashes the process.
+client.on(Events.Error, (error) => console.error("[client] Error:", error));
+process.on("unhandledRejection", (error) => console.error("[process] Promesa sin manejar:", error));
 
 // ─── Login ────────────────────────────────────────────────────────────────────
 client.login(process.env.DISCORD_BOT_TOKEN);

@@ -1,3 +1,5 @@
+import { MessageFlags } from "discord.js";
+
 /**
  * Reading a Discord thread for /ticket and /feature: the messages, their
  * attachments, and whether there is enough written text to work from.
@@ -123,5 +125,5 @@ export function insufficientDescriptionMessage(kind) {
  */
 export async function replyEphemerallyAfterDefer(interaction, content) {
   await interaction.deleteReply().catch(() => {});
-  return interaction.followUp({ content, ephemeral: true });
+  return interaction.followUp({ content, flags: MessageFlags.Ephemeral });
 }
