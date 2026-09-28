@@ -79,7 +79,7 @@ test("el reporte trae las filas listas para pegar en user-links.js", () => {
   const report = formatAudit(audit);
 
   assert.ok(report.includes(linkRow(audit.autoLinks[0])));
-  assert.match(report, /Ana — `n-ana`/);
+  assert.match(report, /Ana: `n-ana`/);
   assert.match(report, /Pepe \(@pepe_99\)/);
   assert.match(report, /gley ortiz/);
   assert.equal(

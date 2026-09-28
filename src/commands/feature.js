@@ -78,7 +78,7 @@ export function buildReviewEmbed({ analysis, evidenceSummary, requesterName, mat
 
   const embed = new EmbedBuilder()
     .setColor(0xe8a33d)
-    .setTitle("💡 Nueva solicitud — Revisar y confirmar")
+    .setTitle("💡 Nueva solicitud · Revisar y confirmar")
     .setDescription(truncate(summary, 4000))
     .addFields(
       { name: "📌 Feature", value: truncate(analysis.title, FIELD_MAX) },
@@ -95,12 +95,12 @@ export function buildReviewEmbed({ analysis, evidenceSummary, requesterName, mat
 
   if (matches.length > 0) {
     embed.addFields({
-      name: "🔁 ¿Ya existe? — posibles solicitudes iguales",
+      name: "🔁 ¿Ya existe? Posibles solicitudes iguales",
       value: truncate(
         matches
           .map(
             (m) =>
-              `${verdictLabel(m.verdict)} · **${m.code ?? "—"}** · [${m.title}](${m.url}) — ${m.stage ?? "Sin etapa"}` +
+              `${verdictLabel(m.verdict)} · ${m.code ? `**${m.code}** · ` : ""}[${m.title}](${m.url}) · ${m.stage ?? "Sin etapa"}` +
               (m.reason ? `\n↳ ${m.reason}` : "")
           )
           .join("\n") +
@@ -128,7 +128,7 @@ export function buildReviewComponents({ userId, state, analysis, matches }) {
     ),
     new ActionRowBuilder().addComponents(
       select("area")
-        .setPlaceholder("Área — elige una o varias")
+        .setPlaceholder("Área: elige una o varias")
         .setMinValues(0)
         .setMaxValues(AREA_OPTIONS.length)
         .addOptions(
@@ -138,7 +138,7 @@ export function buildReviewComponents({ userId, state, analysis, matches }) {
     new ActionRowBuilder().addComponents(
       select("platform")
         .setPlaceholder(
-          analysis.platform ? "Plataforma" : "Plataforma — la IA no encontró una en el thread"
+          analysis.platform ? "Plataforma" : "Plataforma: la IA no encontró una en el hilo"
         )
         .addOptions(
           PLATFORM_OPTIONS.map((p) => ({ label: p, value: p, default: p === state.platform }))
@@ -153,7 +153,7 @@ export function buildReviewComponents({ userId, state, analysis, matches }) {
           .setPlaceholder("Solicitud existente")
           .addOptions(
             matches.map((m) => ({
-              label: truncate(`${m.code ?? "—"} · ${m.title}`, OPTION_MAX),
+              label: truncate(m.code ? `${m.code} · ${m.title}` : m.title, OPTION_MAX),
               description: truncate(
                 `${verdictLabel(m.verdict)} · ${m.stage ?? "Sin etapa"}`,
                 OPTION_MAX

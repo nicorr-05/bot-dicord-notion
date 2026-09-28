@@ -35,10 +35,34 @@ import {
 
 export const data = new SlashCommandBuilder()
   .setName("ticket")
-  .setDescription("Converts this bug-report thread into a Notion ticket using AI");
+  .setDescription("Convierte este hilo de #bug-reports en un ticket de Notion con IA");
 
 /** Two steps now (pre-check, then options), so more time than a single review. */
 const REVIEW_TIMEOUT_MS = 5 * 60_000;
+
+/** Discord's limit for a select option or button label. */
+const LABEL_MAX = 100;
+
+/** Notion keeps the priority names in English; the bot shows them in Spanish. */
+const PRIORITY_ES = { urgent: "Urgente", critical: "Crítica", high: "Alta", medium: "Media", low: "Baja" };
+const priorityLabel = (p) => PRIORITY_ES[String(p).toLowerCase()] ?? p;
+
+const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+/** "[DG-387] Registro…" → "DG-387": short enough for a button next to "Crear ticket". */
+const ticketCode = (title) => title.match(/^\[([A-Z]+-\d+)\]/)?.[1] ?? null;
+
+/** "1 imagen · 2 videos", or null when the thread has no attachments. */
+function describeEvidence({ images, videos, otherFiles }) {
+  const parts = [
+    [images.length, "🖼️", "imagen", "imágenes"],
+    [videos.length, "🎬", "video", "videos"],
+    [otherFiles.length, "📎", "archivo", "archivos"],
+  ]
+    .filter(([n]) => n > 0)
+    .map(([n, icon, one, many]) => `${icon} ${n} ${n === 1 ? one : many}`);
+  return parts.length ? parts.join(" · ") : null;
+}
 
 const defaultDeps = {
   fetchAllMessages,
@@ -72,14 +96,14 @@ async function run(interaction, deps) {
     // 1. Fetch messages
     const messages = await deps.fetchAllMessages(channel);
     if (messages.length === 0) {
-      return interaction.editReply("❌ No messages found in this thread to analyze.");
+      return interaction.editReply("❌ No encontré mensajes en este hilo para analizar.");
     }
     if (!hasEnoughDescription(messages)) {
       return replyEphemerallyAfterDefer(interaction, insufficientDescriptionMessage("bug"));
     }
 
     // 2. Analyze with AI + fetch Notion options in parallel
-    await interaction.editReply("🤖 Analyzing thread with AI...");
+    await interaction.editReply("🤖 Analizando el hilo con IA...");
     // A failed pre-check only skips step 1; it never blocks the ticket.
     const [analysis, precheck, options] = await Promise.all([
       deps.analyzeThread(channel.name, messages),
@@ -100,7 +124,7 @@ async function run(interaction, deps) {
       options.priorityOptions[0];
 
     // Is this bug already reported? Never blocks creating a new ticket.
-    await interaction.editReply("🔎 Looking for similar open tickets...");
+    await interaction.editReply("🔎 Buscando tickets abiertos parecidos...");
     let matches = [];
     try {
       matches = await deps.findSimilarTickets(analysis);
@@ -119,9 +143,6 @@ async function run(interaction, deps) {
     // 4. Store pending selections. These are the values used if the reporter just
     //    hits "Create Ticket": AI priority, no sprint (= Backlog), default assignee.
     const userId = interaction.user.id;
-    const defaultAssignee = options.userOptions.find(
-      (u) => u.id === options.defaultAssigneeId
-    );
 
     // Reporter = whoever ran /ticket. Discord and Notion accounts aren't linked,
     // so match on name (or an explicit env mapping) and let them fix it in the menu.
@@ -134,9 +155,6 @@ async function run(interaction, deps) {
       ],
       options.userOptions
     );
-    const defaultReporter = options.userOptions.find(
-      (u) => u.id === defaultReporterId
-    );
 
     // Who went ahead despite the pre-check and why; saved on the ticket.
     let override = null;
@@ -148,14 +166,17 @@ async function run(interaction, deps) {
       reporterId: defaultReporterId,
     };
 
-    // 5. Build select menus
+    // 5. Build select menus. Discord shows the chosen option instead of the
+    //    placeholder, so every label says which field it is ("Asignado a: …"):
+    //    otherwise assignee and reporter read as the same name twice.
     const priorityRow = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`ticket_priority_${userId}`)
-        .setPlaceholder(`Priority — AI suggested: ${analysis.priority}`)
+        .setPlaceholder("Prioridad")
         .addOptions(
           options.priorityOptions.map((p) => ({
-            label: p,
+            label: `Prioridad: ${priorityLabel(p)}`,
+            description: p === analysis.priority ? "Sugerida por la IA" : undefined,
             value: p,
             default: p === analysis.priority,
           }))
@@ -166,9 +187,9 @@ async function run(interaction, deps) {
     // the "none" sentinel. It is the default: a bug reported mid-sprint is unplanned
     // work and shouldn't silently expand the running sprint's scope.
     const sprintChoices = [
-      { label: "📥 Backlog (sin sprint)", value: "none", default: true },
+      { label: "Sprint: Backlog (sin sprint)", value: "none", default: true },
       ...options.sprintOptions.slice(0, 24).map((s) => ({
-        label: s.status ? `${s.name} — ${s.status}` : s.name,
+        label: clip(`Sprint: ${s.name}${s.status ? ` (${s.status})` : ""}`, LABEL_MAX),
         value: s.id,
         default: false,
       })),
@@ -177,18 +198,18 @@ async function run(interaction, deps) {
     const sprintRow = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`ticket_sprint_${userId}`)
-        .setPlaceholder("Sprint — por defecto: Backlog")
+        .setPlaceholder("Sprint")
         .addOptions(sprintChoices)
     );
 
     const assigneeChoices = options.userOptions.slice(0, 24).map((u) => ({
-      label: u.name,
+      label: clip(`Asignado a: ${u.name}`, LABEL_MAX),
       value: u.id,
       default: u.id === options.defaultAssigneeId,
     }));
     // Escape hatch so the default assignee can be cleared.
     assigneeChoices.push({
-      label: "Sin asignar",
+      label: "Asignado a: nadie",
       value: "none",
       default: !assigneeChoices.some((c) => c.default),
     });
@@ -196,21 +217,17 @@ async function run(interaction, deps) {
     const assigneeRow = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`ticket_assignee_${userId}`)
-        .setPlaceholder(
-          defaultAssignee
-            ? `Assignee — por defecto: ${defaultAssignee.name}`
-            : "Select assignee..."
-        )
+        .setPlaceholder("Asignado a")
         .addOptions(assigneeChoices)
     );
 
     const reporterChoices = options.userOptions.slice(0, 24).map((u) => ({
-      label: u.name,
+      label: clip(`Reporta: ${u.name}`, LABEL_MAX),
       value: u.id,
       default: u.id === defaultReporterId,
     }));
     reporterChoices.push({
-      label: "Sin reporter",
+      label: "Reporta: nadie",
       value: "none",
       default: !reporterChoices.some((c) => c.default),
     });
@@ -218,11 +235,7 @@ async function run(interaction, deps) {
     const reporterRow = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`ticket_reporter_${userId}`)
-        .setPlaceholder(
-          defaultReporter
-            ? `Reporter — detectado: ${defaultReporter.name}`
-            : "Reporter — ¿quién eres en Notion?"
-        )
+        .setPlaceholder("Reporta: ¿quién eres en Notion?")
         .addOptions(reporterChoices)
     );
 
@@ -231,54 +244,54 @@ async function run(interaction, deps) {
     const buttonRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`ticket_create_${userId}`)
-        .setLabel("✅ Create Ticket")
+        .setLabel("Crear ticket")
+        .setEmoji("✅")
         .setStyle(ButtonStyle.Success),
+      // The code alone keeps the row on one line; the full title is in the embed.
       ...matches.map((m, index) =>
         new ButtonBuilder()
           .setCustomId(`ticket_same_${index}_${userId}`)
-          .setLabel(`🔗 Same as: ${m.title}`.slice(0, 80))
+          .setLabel(`Es el mismo que ${ticketCode(m.title) ?? clip(m.title, 40)}`)
+          .setEmoji("🔗")
           .setStyle(ButtonStyle.Primary)
       ),
       new ButtonBuilder()
         .setCustomId(`ticket_cancel_${userId}`)
-        .setLabel("❌ Cancel")
+        .setLabel("Cancelar")
         .setStyle(ButtonStyle.Secondary)
     );
 
     // 6. Show embed with AI analysis + select menus
-    const evidenceSummary =
-      allAttachments.length > 0
-        ? `🖼️ ${images.length} image(s)  🎬 ${videos.length} video(s)  📎 ${otherFiles.length} file(s)`
-        : "None";
+    const evidenceSummary = describeEvidence({ images, videos, otherFiles });
 
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
-      .setTitle("🎫 New Bug Ticket — Review & Confirm")
+      .setTitle("🎫 Nuevo ticket de bug · Revisar y confirmar")
       .addFields(
-        { name: "📌 Title", value: analysis.title },
-        { name: "📝 Description", value: analysis.description },
+        { name: "📌 Título", value: analysis.title },
+        { name: "📝 Descripción", value: analysis.description },
         {
-          name: "🔁 Steps to Reproduce",
-          value: analysis.stepsToReproduce || "Not specified",
+          name: "🔁 Pasos para reproducir",
+          value: analysis.stepsToReproduce || "Sin especificar",
         },
-        { name: "📎 Evidence found", value: evidenceSummary }
+        { name: "📎 Evidencia", value: evidenceSummary ?? "Sin adjuntos" }
       )
-      .setFooter({ text: `${messages.length} messages analyzed · Select options and click Create Ticket` });
+      .setFooter({ text: `${messages.length} mensajes analizados · Ajusta las opciones y pulsa Crear ticket` });
 
     if (matches.length > 0) {
       const list = matches
         .map(
           (m) =>
-            `${verdictLabel(m.verdict)} · [${m.title}](${m.url}) — ${m.status ?? "no status"}` +
+            `${verdictLabel(m.verdict)} · [${m.title}](${m.url}) · ${m.status ?? "sin estado"}` +
             (m.reason ? `\n  ↳ ${m.reason}` : "")
         )
         .join("\n");
       embed.addFields({
-        name: "🔁 Already reported? — possible duplicates",
+        name: "🔁 ¿Ya está reportado? Posibles duplicados",
         value: (
           list +
-          "\n\n**Different bug?** → Create Ticket.\n" +
-          "**New case of the same bug?** → 🔗 Same as… (adds this report as a comment)."
+          "\n\n**¿Es otro bug?** → Crear ticket.\n" +
+          "**¿Es otro caso del mismo bug?** → 🔗 Es el mismo que… (agrega este reporte como comentario)."
         ).slice(0, 1024),
       });
     }
@@ -349,7 +362,7 @@ async function run(interaction, deps) {
         collector.stop("submitted");
         await i.deferUpdate();
         await interaction.editReply({
-          content: "📝 Creating ticket in Notion...",
+          content: "📝 Creando el ticket en Notion...",
           embeds: [],
           components: [],
         });
@@ -359,7 +372,7 @@ async function run(interaction, deps) {
           title: analysis.title,
           description: analysis.description,
           priority: pending.priority,
-          stepsToReproduce: analysis.stepsToReproduce || "Not specified",
+          stepsToReproduce: analysis.stepsToReproduce || "Sin especificar",
           reporterName: interaction.user.username,
           reporterDiscordId: userId,
           threadUrl,
@@ -377,27 +390,27 @@ async function run(interaction, deps) {
           "Backlog";
         const assigneeLabel =
           options.userOptions.find((u) => u.id === pending.assigneeId)?.name ??
-          "Sin asignar";
+          "nadie";
         const reporterLabel =
           options.userOptions.find((u) => u.id === pending.reporterId)?.name ??
-          "Sin reporter";
+          "nadie";
 
         await interaction.editReply(
-          `✅ **Ticket created successfully!**\n\n` +
-            `**Title:** ${analysis.title}\n` +
-            `**Priority:** ${pending.priority}\n` +
+          `✅ **Ticket creado**\n\n` +
+            `**Título:** ${analysis.title}\n` +
+            `**Prioridad:** ${priorityLabel(pending.priority)}\n` +
             `**Sprint:** ${sprintLabel}\n` +
-            `**Assignee:** ${assigneeLabel}\n` +
-            `**Reporter:** ${reporterLabel}\n` +
+            `**Asignado a:** ${assigneeLabel}\n` +
+            `**Reporta:** ${reporterLabel}\n` +
             `**Notion:** ${notionPage.url}\n\n` +
-            `*${messages.length} messages analyzed.*`
+            `*${messages.length} mensajes analizados.*`
         );
       } else if (i.customId.startsWith("ticket_same_")) {
         collector.stop("merged");
         await i.deferUpdate();
         const target = matches[Number(i.customId.split("_")[2])];
         await interaction.editReply({
-          content: "🔗 Adding this report to the existing ticket...",
+          content: "🔗 Agregando este reporte al ticket existente...",
           embeds: [],
           components: [],
         });
@@ -407,13 +420,13 @@ async function run(interaction, deps) {
             analysis,
             reporterName: interaction.user.username,
             threadUrl: `https://discord.com/channels/${interaction.guildId}/${channel.id}`,
-            evidenceSummary: allAttachments.length > 0 ? evidenceSummary : null,
+            evidenceSummary,
           });
           await interaction.editReply(
-            `🔗 **Added as a new case of an existing ticket**\n\n` +
+            `🔗 **Agregado como nuevo caso de un ticket existente**\n\n` +
               `**Ticket:** ${target.title}\n` +
-              `**Status:** ${target.status ?? "—"}\n` +
-              `This thread's report was added as a comment on the page.\n` +
+              `**Estado:** ${target.status ?? "sin estado"}\n` +
+              `El reporte de este hilo quedó como comentario en la página.\n` +
               `**Notion:** ${target.url}`
           );
         } catch (error) {
@@ -424,7 +437,7 @@ async function run(interaction, deps) {
         collector.stop("cancelled");
         await i.deferUpdate();
         await interaction.editReply({
-          content: "❌ Ticket creation cancelled.",
+          content: "Creación del ticket cancelada.",
           embeds: [],
           components: [],
         });
@@ -434,7 +447,7 @@ async function run(interaction, deps) {
     collector.on("end", (_, reason) => {
       if (reason === "time") {
         interaction.editReply({
-          content: "⏱️ Timed out. Run `/ticket` again.",
+          content: "⏱️ Se acabó el tiempo. Vuelve a correr `/ticket`.",
           embeds: [],
           components: [],
         });
@@ -442,8 +455,6 @@ async function run(interaction, deps) {
     });
   } catch (error) {
     console.error("[/ticket] Error:", error);
-    return interaction.editReply(
-      `❌ Something went wrong: ${error.message}\n\nCheck the bot logs for details.`
-    );
+    return interaction.editReply(describeError(error, { target: "la base de tickets" }));
   }
 }

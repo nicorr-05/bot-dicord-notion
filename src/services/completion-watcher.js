@@ -129,7 +129,7 @@ async function resolveThread(client, ticket) {
   } catch (error) {
     if (GONE_ERROR_CODES.has(error.code)) {
       console.warn(
-        `[Watcher] Hilo ${ticket.threadId} ya no existe — aviso en #${FALLBACK_CHANNEL_NAME}.`
+        `[Watcher] Hilo ${ticket.threadId} ya no existe; aviso en #${FALLBACK_CHANNEL_NAME}.`
       );
       return null;
     }
@@ -146,7 +146,7 @@ async function resolveThread(client, ticket) {
       await channel.setArchived(false);
     } catch (error) {
       console.warn(
-        `[Watcher] No se pudo reabrir el hilo ${ticket.threadId} (${error.message}) — ` +
+        `[Watcher] No se pudo reabrir el hilo ${ticket.threadId} (${error.message}); ` +
           `aviso en #${FALLBACK_CHANNEL_NAME}.`
       );
       return null;
@@ -228,7 +228,7 @@ export async function startCompletionWatcher(client) {
     await ensureNotifiedProperty();
   } catch (error) {
     console.error(
-      "[Watcher] No se pudo preparar la propiedad de control en Notion — " +
+      "[Watcher] No se pudo preparar la propiedad de control en Notion; " +
         "las notificaciones de completado quedan desactivadas:",
       error.message
     );

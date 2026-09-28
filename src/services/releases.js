@@ -180,14 +180,14 @@ async function prepareMedia(ticket, channel) {
     } catch (error) {
       if (media.kind === "external") {
         console.warn(
-          `[Releases] No se pudo re-subir el archivo de "${ticket.title}" (${error.message}) — se publica como link.`
+          `[Releases] No se pudo re-subir el archivo de "${ticket.title}" (${error.message}); se publica como link.`
         );
         return { kind: "link", url: media.url };
       }
       // Notion-hosted and unusable: the signed URL is not worth publishing.
       console.warn(
         `[Releases] El archivo de "${ticket.title}" ${error.message}. ` +
-          "Se publica el release sin él — súbelo a Loom/YouTube y pega el link en «Video release»."
+          "Se publica el release sin él; súbelo a Loom/YouTube y pega el link en «Video release»."
       );
       return { kind: "none" };
     }
@@ -197,7 +197,7 @@ async function prepareMedia(ticket, channel) {
 
   console.warn(
     `[Releases] El archivo de "${ticket.title}" no es un video ni una imagen que Discord ` +
-      `sepa previsualizar (${media.url}) — se publica igual como link.`
+      `sepa previsualizar (${media.url}); se publica igual como link.`
   );
   return { kind: "link", url: media.url };
 }
@@ -239,7 +239,7 @@ export async function buildReleaseNote(ticket) {
     if (note.summary) return note;
   } catch (error) {
     console.warn(
-      `[Releases] Resumen con IA falló para "${ticket.title}" (${error.message}) — se usa el texto del ticket.`
+      `[Releases] Resumen con IA falló para "${ticket.title}" (${error.message}); se usa el texto del ticket.`
     );
   }
 

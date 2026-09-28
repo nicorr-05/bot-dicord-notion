@@ -51,7 +51,7 @@ client.on("interactionCreate", async (interaction) => {
     await command.execute(interaction);
   } catch (error) {
     console.error(`[interactionCreate] Error executing /${interaction.commandName}:`, error);
-    const msg = { content: "❌ An unexpected error occurred.", flags: MessageFlags.Ephemeral };
+    const msg = { content: "❌ Ocurrió un error inesperado.", flags: MessageFlags.Ephemeral };
     // Telling the user can fail too: an interaction older than 3 s (bot restarting,
     // slow start) is already dead. That must never take the whole bot down.
     try {

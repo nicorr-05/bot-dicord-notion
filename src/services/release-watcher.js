@@ -89,7 +89,7 @@ async function poll(client) {
   const { ready: pending, settling } = partitionByQuietPeriod(unannounced);
   if (settling.length > 0) {
     console.log(
-      `[Releases] ${settling.length} ticket(s) editados hace poco — se anuncian ` +
+      `[Releases] ${settling.length} ticket(s) editados hace poco; se anuncian ` +
         `cuando se enfríen: ${settling.map((t) => `"${t.title}"`).join(", ")}`
     );
   }
@@ -109,7 +109,7 @@ async function poll(client) {
   const channel = await getReleasesChannel(client);
   if (!channel) {
     console.error(
-      "[Releases] No hay canal de releases donde publicar — revisa DISCORD_RELEASES_CHANNEL_ID."
+      "[Releases] No hay canal de releases donde publicar; revisa DISCORD_RELEASES_CHANNEL_ID."
     );
     return;
   }
@@ -144,7 +144,7 @@ export async function startReleaseWatcher(client) {
     await ensureReleaseProperties();
   } catch (error) {
     console.error(
-      "[Releases] No se pudieron preparar las propiedades en Notion — " +
+      "[Releases] No se pudieron preparar las propiedades en Notion; " +
         "el canal de releases queda desactivado:",
       error.message
     );

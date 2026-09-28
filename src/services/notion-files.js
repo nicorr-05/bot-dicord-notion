@@ -40,7 +40,7 @@ export async function uploadAttachment(
 ) {
   if (attachment.size && attachment.size > MAX_SINGLE_PART_BYTES) {
     console.warn(
-      `[Notion] "${attachment.name}" pesa ${Math.round(attachment.size / 1e6)} MB — se enlaza en vez de subirlo.`
+      `[Notion] "${attachment.name}" pesa ${Math.round(attachment.size / 1e6)} MB; se enlaza en vez de subirlo.`
     );
     return null;
   }

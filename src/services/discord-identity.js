@@ -56,7 +56,7 @@ export async function resolveDiscordId(client, { discordId, notionId, name } = {
 
     if (!id) {
       console.warn(
-        `[Identidad] "${query}" no coincide con ningún miembro del server — se muestra el nombre sin etiquetar.`
+        `[Identidad] "${query}" no coincide con ningún miembro del server; se muestra el nombre sin etiquetar.`
       );
     }
   } catch (error) {

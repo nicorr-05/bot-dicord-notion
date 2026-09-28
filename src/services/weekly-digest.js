@@ -229,7 +229,7 @@ export function buildDigestEmbed(tickets, { start, end, timeZone }) {
       ([trimSummary(ticket.note?.summary), metaLine(ticket)]
         .filter(Boolean)
         .join("\n")
-        .slice(0, 1024 - SPACER.length) || "—") + SPACER;
+        .slice(0, 1024 - SPACER.length) || "Sin detalle") + SPACER;
 
     if (used + name.length + value.length > MAX_EMBED_CHARS) break;
 
@@ -266,7 +266,7 @@ async function sendDigest(client, sentAt, { skipIfAlreadySent = false } = {}) {
 
   if (!channel) {
     console.error(
-      "[Digest] No hay canal de releases donde publicar el resumen — revisa DISCORD_RELEASES_CHANNEL_ID."
+      "[Digest] No hay canal de releases donde publicar el resumen; revisa DISCORD_RELEASES_CHANNEL_ID."
     );
     return;
   }
@@ -318,7 +318,7 @@ export async function startWeeklyDigest(client) {
   const { next } = scheduleWeekly(spec, (firedAt) => sendDigest(client, firedAt));
 
   console.log(
-    `📅 Resumen semanal activo — próximo envío: ` +
+    `📅 Resumen semanal activo, próximo envío: ` +
       `${next.toLocaleString("es", { timeZone: spec.timeZone })} (${spec.timeZone})`
   );
 }

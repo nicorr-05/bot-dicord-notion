@@ -37,6 +37,16 @@ function client() {
   return openai;
 }
 
+/** Em dashes read as machine-written; every AI text is shown to people, so swap them for commas. */
+function withoutEmDashes(value) {
+  if (typeof value === "string") return value.replace(/\s*—\s*/g, ", ");
+  if (Array.isArray(value)) return value.map(withoutEmDashes);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withoutEmDashes(v)]));
+  }
+  return value;
+}
+
 /**
  * Sends a prompt that must be answered with a JSON object and parses it. Failures
  * come back as AIError with a message that can be shown in Discord as-is.
@@ -62,7 +72,7 @@ async function completeJson(prompt, { temperature = 0.2, purpose } = {}) {
   }
 
   try {
-    return JSON.parse(response.choices[0].message.content);
+    return withoutEmDashes(JSON.parse(response.choices[0].message.content));
   } catch (error) {
     throw new AIError("La IA devolvió una respuesta ilegible. Intenta de nuevo.", { cause: error });
   }
@@ -98,10 +108,10 @@ Messages:
 ${conversation}
 
 Return a JSON object with exactly these fields:
-- "title": A concise, clear bug title (max 80 chars). Keep it in the same language as the thread.
-- "description": A clear summary of the bug, what happens vs what should happen (2-4 sentences). Same language as the thread.
-- "priority": One of exactly: "Urgent", "High", "Medium", "Low" — based on the severity discussed.
-- "stepsToReproduce": A numbered list of steps to reproduce the bug, extracted from the discussion. If not clear, write "Not specified". Same language as thread.
+- "title": A concise, clear bug title (max 80 chars). In Spanish.
+- "description": A clear summary of the bug, what happens vs what should happen (2-4 sentences). In Spanish.
+- "priority": One of exactly: "Urgent", "High", "Medium", "Low", based on the severity discussed.
+- "stepsToReproduce": A numbered list of steps to reproduce the bug, extracted from the discussion. If not clear, write "Sin especificar". In Spanish.
 
 Respond ONLY with valid JSON, no markdown, no extra text.
 `;

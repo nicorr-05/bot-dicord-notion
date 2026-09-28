@@ -203,13 +203,13 @@ export async function fetchTicketOptions() {
   // which looks like a bug in the menu rather than a config problem.
   if (!DEFAULT_ASSIGNEE_ID) {
     console.warn(
-      "[Notion] NOTION_DEFAULT_ASSIGNEE_ID no está definido — los tickets saldrán sin asignar. " +
+      "[Notion] NOTION_DEFAULT_ASSIGNEE_ID no está definido; los tickets saldrán sin asignar. " +
         "¿Reiniciaste el bot después de editar el .env?"
     );
   } else if (!defaultAssigneeId) {
     console.warn(
       `[Notion] NOTION_DEFAULT_ASSIGNEE_ID="${DEFAULT_ASSIGNEE_ID}" no coincide con ningún ` +
-        "usuario del workspace — los tickets saldrán sin asignar."
+        "usuario del workspace; los tickets saldrán sin asignar."
     );
   }
   if (defaultAssigneeId) {
@@ -433,11 +433,11 @@ export async function findSimilarTickets(analysis, { judge = judgeDuplicates } =
 /** The comment a new report leaves on the ticket it turned out to duplicate. */
 export function buildTicketCaseComment({ analysis, reporterName, threadUrl, evidenceSummary }) {
   const text =
-    `➕ New case of this bug from Discord — reported by ${reporterName}\n\n` +
+    `➕ Nuevo caso de este bug desde Discord, reportado por ${reporterName}\n\n` +
     `${analysis.description}\n\n` +
-    `Steps to reproduce:\n${analysis.stepsToReproduce || "Not specified"}\n` +
-    (evidenceSummary ? `\nEvidence in the thread: ${evidenceSummary}\n` : "") +
-    `\nDiscord thread: `;
+    `Pasos para reproducir:\n${analysis.stepsToReproduce || "Sin especificar"}\n` +
+    (evidenceSummary ? `\nEvidencia en el hilo: ${evidenceSummary}\n` : "") +
+    `\nHilo de Discord: `;
 
   const content = text.length > 1800 ? `${text.slice(0, 1799)}…` : text;
   return [

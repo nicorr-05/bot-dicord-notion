@@ -245,7 +245,7 @@ export function featureText({ title, problem }) {
 export function buildContextComment({ analysis, requesterName, threadUrl, evidenceSummary }) {
   const s = analysis.sections;
   const text =
-    `➕ Nuevo caso de la misma necesidad desde Discord — registrado por ${requesterName}\n\n` +
+    `➕ Nuevo caso de la misma necesidad desde Discord, registrado por ${requesterName}\n\n` +
     `Quién lo pide: ${s.quienLoPide}\n` +
     `Problema: ${analysis.problem}\n` +
     `Qué pidió: ${s.quePidioElMedico}\n` +

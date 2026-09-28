@@ -131,7 +131,7 @@ export function formatAudit(audit) {
   if (audit.unmatchedNotion.length) {
     parts.push(
       `\n❓ **En Notion sin pareja en Discord:**\n` +
-        audit.unmatchedNotion.map((u) => `• ${u.name} — \`${u.id}\``).join("\n")
+        audit.unmatchedNotion.map((u) => `• ${u.name}: \`${u.id}\``).join("\n")
     );
   }
 
@@ -139,7 +139,7 @@ export function formatAudit(audit) {
     parts.push(
       `\n❓ **En Discord sin pareja en Notion:**\n` +
         audit.unmatchedDiscord
-          .map((m) => `• ${m.globalName ?? m.username} (@${m.username}) — \`${m.id}\``)
+          .map((m) => `• ${m.globalName ?? m.username} (@${m.username}): \`${m.id}\``)
           .join("\n")
     );
   }
