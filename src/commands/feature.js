@@ -17,6 +17,7 @@ import { checkFeatureChannel } from "../lib/channels.js";
 import { describeError } from "../lib/errors.js";
 import { verdictLabel } from "../lib/duplicates.js";
 import {
+  askOverrideReason,
   buildPrecheckBlocks,
   buildPrecheckComponents,
   buildPrecheckEmbed,
@@ -253,6 +254,8 @@ export function makeExecute(deps = defaultDeps) {
       areas: analysis.areas,
       platform: analysis.platform,
       matchId: matches[0]?.id ?? null,
+      // Who went ahead despite the pre-check and why; saved on the request.
+      override: null,
     };
 
     // 5. Step 1: does this belong in Notion? Step 2: review & confirm.
@@ -297,11 +300,20 @@ export function makeExecute(deps = defaultDeps) {
       else if (action === "match") state.matchId = i.values[0];
 
       if (action === "precheck-yes" || action === "precheck-no") {
+        const level = precheckLevel(precheck);
+        if (action === "precheck-yes" && level !== "ready") {
+          // Skipping the warning takes a short reason; closing the modal keeps step 1.
+          const reason = await askOverrideReason(i, { prefix: "feature", userId, precheck });
+          if (!reason || collector.ended) return;
+          state.override = { reason, by: interaction.user.username };
+        } else {
+          await i.deferUpdate();
+        }
         console.log(
-          `[/feature] Pre-chequeo: ${precheckLevel(precheck)} (${precheck.classification}), ` +
-            `decisión: ${action === "precheck-yes" ? "continuar" : "revisar"}`
+          `[/feature] Pre-chequeo: ${level} (${precheck.classification}), ` +
+            `decisión: ${action === "precheck-yes" ? "continuar" : "revisar"}` +
+            (state.override ? `, razón de ${state.override.by}: ${state.override.reason}` : "")
         );
-        await i.deferUpdate();
         if (action === "precheck-yes") return interaction.editReply(review);
         collector.stop("declined");
         return finish(precheckDeclinedMessage(precheck));
@@ -349,7 +361,7 @@ export function makeExecute(deps = defaultDeps) {
           requesterDiscordId: userId,
           threadUrl,
           attachments: evidence.all,
-          precheckBlocks: buildPrecheckBlocks(precheck),
+          precheckBlocks: buildPrecheckBlocks(precheck, state.override),
         });
 
         return finish(

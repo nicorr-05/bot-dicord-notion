@@ -9,7 +9,15 @@
  * The check only adds friction when there is a reason to, and a check that fails
  * never blocks creating the ticket.
  */
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from "discord.js";
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+} from "discord.js";
 import { truncate } from "./feature-requests.js";
 import { guideUrl } from "./thread.js";
 
@@ -53,7 +61,8 @@ export const CHECKS = {
 };
 
 const CHECK_STATUSES = ["ok", "parcial", "falta"];
-const CHECK_ICON = { ok: "✅", parcial: "🟡", falta: "⬜" };
+const CHECK_ICON = { ok: "✅", parcial: "🟡", falta: "❌" };
+const CHECK_LEGEND = "✅ cumple · 🟡 incompleto · ❌ falta";
 
 /** Ready-made answers for the doctor, from section 9 of the bug guide. */
 export const CANNED_REPLIES = {
@@ -155,11 +164,22 @@ export function buildPrecheckEmbed(precheck, { duplicateCount = 0 } = {}) {
   const embed = new EmbedBuilder()
     .setColor(LEVEL[level].color)
     .setTitle(LEVEL[level].title(words))
-    .setDescription(truncate(intro || "Revisa el checklist antes de continuar.", 4000))
-    .addFields({
+    .setDescription(truncate(intro || "Revisa el checklist antes de continuar.", 4000));
+
+  // When it probably isn't a bug / request at all, grading the report against the
+  // checklist only muddies the message ("✅ esperado vs. actual" next to "no es un
+  // bug"). The checklist comes back once the thread is clearly in the right place.
+  if (level === "warning") {
+    embed.addFields({
       name: "Checklist de la guía",
+      value: `Se revisa cuando quede claro que es un ${words.noun}.`,
+    });
+  } else {
+    embed.addFields({
+      name: `Checklist de la guía (${CHECK_LEGEND})`,
       value: precheck.checks.map((c) => `${CHECK_ICON[c.status]} ${c.label}`).join("\n"),
     });
+  }
 
   if (precheck.questions.length > 0 && level !== "ready") {
     embed.addFields({
@@ -200,7 +220,7 @@ export function buildPrecheckComponents({ prefix, userId, precheck }) {
 
   const yes = new ButtonBuilder()
     .setCustomId(`${prefix}_precheck-yes_${userId}`)
-    .setLabel(level === "ready" ? "Sí, continuar" : `Sí, crear ${item} igual`)
+    .setLabel(level === "ready" ? "Sí, continuar" : `Sí, crear ${item} igual…`)
     .setStyle(level === "ready" ? ButtonStyle.Success : ButtonStyle.Secondary);
 
   const no = new ButtonBuilder()
@@ -209,6 +229,52 @@ export function buildPrecheckComponents({ prefix, userId, precheck }) {
     .setStyle(level === "ready" ? ButtonStyle.Secondary : ButtonStyle.Primary);
 
   return [new ActionRowBuilder().addComponents(level === "ready" ? [yes, no] : [no, yes])];
+}
+
+const OVERRIDE_TIMEOUT_MS = 3 * 60_000;
+const OVERRIDE_REASON_MAX = 300;
+
+/** The one question asked when someone goes ahead despite the check. */
+export function buildOverrideModal({ customId, precheck }) {
+  const words = WORDS[precheck.kind];
+  const input = new TextInputBuilder()
+    .setCustomId("reason")
+    .setLabel("Razón corta (queda guardada en Notion)")
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(true)
+    .setMinLength(5)
+    .setMaxLength(OVERRIDE_REASON_MAX)
+    .setPlaceholder(
+      precheckLevel(precheck) === "warning"
+        ? `Ej.: ya descartamos otras causas, es un ${words.noun} porque…`
+        : "Ej.: el médico no responde y el caso es urgente"
+    );
+
+  return new ModalBuilder()
+    .setCustomId(customId)
+    .setTitle(`¿Por qué crear ${words.item} igual?`)
+    .addComponents(new ActionRowBuilder().addComponents(input));
+}
+
+/**
+ * Asks for the reason behind "Sí, crear igual". Resolves to the reason, or null
+ * when the modal is closed or times out: then step 1 stays on screen and the
+ * reporter can click again. The click's id goes into the modal's so an abandoned
+ * modal can never swallow a later submit.
+ */
+export async function askOverrideReason(i, { prefix, userId, precheck }) {
+  const customId = `${prefix}_precheck-reason_${i.id}`;
+  await i.showModal(buildOverrideModal({ customId, precheck }));
+  try {
+    const submit = await i.awaitModalSubmit({
+      filter: (m) => m.customId === customId && m.user.id === userId,
+      time: OVERRIDE_TIMEOUT_MS,
+    });
+    await submit.deferUpdate();
+    return asLine(submit.fields.getTextInputValue("reason")) || null;
+  } catch {
+    return null;
+  }
 }
 
 /** What stays in the thread after "No": the to-do list, so the work isn't lost. */
@@ -233,10 +299,11 @@ export function precheckDeclinedMessage(precheck) {
 
 /**
  * Notion blocks recording that the reporter went ahead despite a warning, so
- * whoever triages sees the doubt and what was never confirmed. Nothing when the
+ * whoever triages sees the doubt, what was never confirmed, and who skipped the
+ * warning and why (to tune the guide or the prompt). Nothing when the
  * check passed cleanly: no noise on good tickets.
  */
-export function buildPrecheckBlocks(precheck) {
+export function buildPrecheckBlocks(precheck, override = null) {
   if (!precheck || precheckLevel(precheck) === "ready") return [];
 
   const pending = precheck.checks.filter((c) => c.status !== "ok").map((c) => c.label);
@@ -245,7 +312,10 @@ export function buildPrecheckBlocks(precheck) {
       ? `La IA dudó: ${CLASSIFICATIONS[precheck.kind][precheck.classification]}.` +
         (precheck.reason ? ` ${precheck.reason}` : "")
       : "La IA encontró el reporte incompleto.") +
-    " Quien reportó confirmó que igual se creara." +
+    (override?.by
+      ? ` ${override.by} confirmó que igual se creara.`
+      : " Quien reportó confirmó que igual se creara.") +
+    (override?.reason ? `\nRazón: ${override.reason}` : "") +
     (pending.length ? `\nSin confirmar en el thread: ${pending.join("; ")}.` : "") +
     (precheck.questions.length ? `\nPreguntas abiertas: ${precheck.questions.join(" ")}` : "");
 

@@ -18,6 +18,7 @@ import { describeError } from "../lib/errors.js";
 import { verdictLabel } from "../lib/duplicates.js";
 import { checkTicketChannel } from "../lib/channels.js";
 import {
+  askOverrideReason,
   buildPrecheckBlocks,
   buildPrecheckComponents,
   buildPrecheckEmbed,
@@ -135,6 +136,9 @@ async function run(interaction, deps) {
     const defaultReporter = options.userOptions.find(
       (u) => u.id === defaultReporterId
     );
+
+    // Who went ahead despite the pre-check and why; saved on the ticket.
+    let override = null;
 
     const pending = {
       priority: analysis.priority,
@@ -307,11 +311,20 @@ async function run(interaction, deps) {
         i.customId === `ticket_precheck-no_${userId}`
       ) {
         const proceed = i.customId === `ticket_precheck-yes_${userId}`;
+        const level = precheckLevel(precheck);
+        if (proceed && level !== "ready") {
+          // Skipping the warning takes a short reason; closing the modal keeps step 1.
+          const reason = await askOverrideReason(i, { prefix: "ticket", userId, precheck });
+          if (!reason || collector.ended) return;
+          override = { reason, by: interaction.user.username };
+        } else {
+          await i.deferUpdate();
+        }
         console.log(
-          `[/ticket] Pre-chequeo: ${precheckLevel(precheck)} (${precheck.classification}), ` +
-            `decisión: ${proceed ? "continuar" : "revisar"}`
+          `[/ticket] Pre-chequeo: ${level} (${precheck.classification}), ` +
+            `decisión: ${proceed ? "continuar" : "revisar"}` +
+            (override ? `, razón de ${override.by}: ${override.reason}` : "")
         );
-        await i.deferUpdate();
         if (proceed) return interaction.editReply(review);
         collector.stop("declined");
         return interaction.editReply({
@@ -354,7 +367,7 @@ async function run(interaction, deps) {
           assigneeId: pending.assigneeId,
           reporterId: pending.reporterId,
           attachments: allAttachments,
-          precheckBlocks: buildPrecheckBlocks(precheck),
+          precheckBlocks: buildPrecheckBlocks(precheck, override),
         });
 
         // Surface sprint/assignee too — both have defaults the reporter may not have touched.

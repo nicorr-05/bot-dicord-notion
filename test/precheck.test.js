@@ -79,6 +79,24 @@ test("el embed de advertencia muestra la duda, las preguntas, la respuesta suger
   assert.ok(embed.fields.find((f) => f.name.startsWith("Respuesta")).value.includes(CANNED_REPLIES.conexion.slice(0, 40)));
 });
 
+test("checklist: tres estados con leyenda; con advertencia se oculta", () => {
+  const review = normalizePrecheck(
+    { classification: "bug", checks: { ...allOk, impacto: "parcial", contexto: "falta" } },
+    "bug"
+  );
+  const field = buildPrecheckEmbed(review).toJSON().fields[0];
+  assert.match(field.name, /✅ cumple · 🟡 incompleto · ❌ falta/);
+  assert.match(field.value, /✅ Resultado esperado/);
+  assert.match(field.value, /🟡 Frecuencia/);
+  assert.match(field.value, /❌ Usuario, plataforma/);
+  assert.doesNotMatch(field.value, /⬜/);
+
+  const warning = buildPrecheckEmbed(dictation).toJSON().fields[0];
+  assert.equal(warning.name, "Checklist de la guía");
+  assert.match(warning.value, /cuando quede claro que es un bug/);
+  assert.doesNotMatch(warning.value, /✅/);
+});
+
 test("con advertencia, 'No' va primero y resaltado; si está listo, 'Sí' va primero", () => {
   const labels = (p) =>
     buildPrecheckComponents({ prefix: "ticket", userId: "u", precheck: p })[0]
@@ -171,7 +189,7 @@ test("/ticket: 'Sí' pasa a los selectores y el ticket guarda la nota del pre-ch
   const fake = fakeInteraction(bugThread(), { prefix: "ticket" });
 
   await makeTicket(deps)(fake.interaction);
-  await fake.click("precheck-yes");
+  await fake.click("precheck-yes", [], { reason: "Ya probó en Chrome y Safari, sigue igual." });
 
   const step2 = fake.calls.editReply.at(-1);
   const ids = step2.components.flatMap((r) => r.toJSON().components.map((c) => c.custom_id));
@@ -181,7 +199,38 @@ test("/ticket: 'Sí' pasa a los selectores y el ticket guarda la nota del pre-ch
   await fake.click("create");
   assert.equal(calls.create.length, 1);
   assert.equal(calls.create[0].precheckBlocks[1].type, "callout");
+  const note = calls.create[0].precheckBlocks[1].callout.rich_text[0].text.content;
+  assert.match(note, /cesar\.docguia confirmó que igual se creara/);
+  assert.match(note, /Razón: Ya probó en Chrome y Safari/);
   assert.equal(calls.create[0].assigneeId, "n-nico");
+});
+
+test("/ticket: saltarse el aviso pide una razón; cerrar el modal deja el paso 1", async () => {
+  const { deps, calls } = ticketDeps();
+  const fake = fakeInteraction(bugThread(), { prefix: "ticket" });
+
+  await makeTicket(deps)(fake.interaction);
+  const edits = fake.calls.editReply.length;
+  await fake.click("precheck-yes");
+
+  assert.equal(fake.calls.modals.length, 1);
+  assert.match(fake.calls.modals[0].toJSON().title, /Por qué crear el ticket igual/);
+  assert.equal(fake.calls.editReply.length, edits);
+  assert.equal(calls.create.length, 0);
+});
+
+test("/ticket: si el reporte está listo, 'Sí' no pide razón", async () => {
+  const { deps } = ticketDeps({
+    precheckReport: async () => normalizePrecheck({ classification: "bug", checks: allOk }, "bug"),
+  });
+  const fake = fakeInteraction(bugThread(), { prefix: "ticket" });
+
+  await makeTicket(deps)(fake.interaction);
+  await fake.click("precheck-yes");
+
+  assert.equal(fake.calls.modals.length, 0);
+  const ids = fake.calls.editReply.at(-1).components.flatMap((r) => r.toJSON().components.map((c) => c.custom_id));
+  assert.ok(ids.includes("ticket_create_user-1"));
 });
 
 test("/ticket: si el pre-chequeo falla, va directo a los selectores", async () => {
@@ -226,10 +275,11 @@ test("/feature: 'Sí' lleva a la revisión y 'Crear' guarda la nota; sin 'Sí' n
   const step1Ids = step1.components.flatMap((r) => r.toJSON().components.map((c) => c.custom_id));
   assert.ok(!step1Ids.includes("feature_origin_user-1"));
 
-  await fake.click("precheck-yes");
+  await fake.click("precheck-yes", [], { reason: "El médico insiste en que no lo encuentra." });
   await fake.click("create");
 
   assert.equal(created.length, 1);
   assert.equal(created[0].precheckBlocks[1].type, "callout");
+  assert.match(created[0].precheckBlocks[1].callout.rich_text[0].text.content, /Razón: El médico insiste/);
   assert.match(fake.lastEdit(), /FR-9/);
 });
